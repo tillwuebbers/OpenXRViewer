@@ -13,6 +13,26 @@ else()
     target_link_libraries(${PROJECT_NAME} "${CMAKE_CURRENT_BINARY_DIR}/libraries/OpenXR-SDK/src/loader/openxr_loader.lib")
 endif()
 
+#imgui
+set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libraries/imgui)
+
+target_sources( ${PROJECT_NAME}
+                PRIVATE
+                    ${IMGUI_DIR}/imgui_demo.cpp
+                    ${IMGUI_DIR}/imgui_draw.cpp
+                    ${IMGUI_DIR}/imgui_tables.cpp
+                    ${IMGUI_DIR}/imgui_widgets.cpp
+                    ${IMGUI_DIR}/imgui.cpp
+
+                PRIVATE
+                    ${IMGUI_DIR}/backends/imgui_impl_dx12.cpp
+                    ${IMGUI_DIR}/backends/imgui_impl_win32.cpp
+                )
+
+target_include_directories( ${PROJECT_NAME}
+                            PUBLIC ${IMGUI_DIR}
+                            PUBLIC ${IMGUI_DIR}/backends )
+
 # assets
 file(COPY "fonts/Montserrat-Regular.ttf" DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 file(COPY "fonts/remixicon.ttf" DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
