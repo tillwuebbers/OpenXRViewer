@@ -4,3 +4,6 @@
 [submodule "OpenXRViewer/libraries/imgui"]
 	path = OpenXRViewer/libraries/imgui
 	url = https://github.com/ocornut/imgui
+[submodule "OpenXRViewer/libraries/DirectX-Headers"]
+	path = OpenXRViewer/libraries/DirectX-Headers
+	url = https://github.com/microsoft/DirectX-Headers

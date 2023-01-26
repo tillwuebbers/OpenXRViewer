@@ -1,9 +1,10 @@
-﻿// OpenXRViewer.cpp : Defines the entry point for the application.
-//
+﻿#include "OpenXRViewer.h"
+#include "xr_demo/xrdemo.h"
 
-#include "OpenXRViewer.h"
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
 
-int main()
+int main(int argc, char* argv[])
 {
-	return 0;
+	return RunDemo(argc, argv);
 }

@@ -1,8 +1,14 @@
 ﻿# Add source to this project's executable.
-add_executable (OpenXRViewer "OpenXRViewer.cpp" "OpenXRViewer.h")
+file(GLOB XR_DEMO_HEADERS "xr_demo/*.h")
+file(GLOB XR_DEMO_SOURCE "xr_demo/*.cpp")
+add_executable (OpenXRViewer ${XR_DEMO_HEADERS} ${XR_DEMO_SOURCE} "OpenXRViewer.cpp" "OpenXRViewer.h")
+
+# directx
+target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/libraries/DirectX-Headers/include/directx")
 
 # openxr
 add_definitions(-DXR_USE_GRAPHICS_API_D3D12)
+add_definitions(-DXR_USE_PLATFORM_WIN32)
 set(OPENXR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libraries/OpenXR-SDK)
 add_subdirectory(${OPENXR_DIR})
 target_include_directories(${PROJECT_NAME} PUBLIC ${OPENXR_DIR}/include)
