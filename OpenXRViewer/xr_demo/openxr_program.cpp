@@ -664,7 +664,7 @@ struct OpenXrProgram : IOpenXrProgram {
                 std::vector<XrSwapchainImageBaseHeader*> swapchainImages =
                     m_graphicsPlugin->AllocateSwapchainImageStructs(imageCount, swapchainCreateInfo);
                 CHECK_XRCMD(xrEnumerateSwapchainImages(swapchain.handle, imageCount, &imageCount, swapchainImages[0]));
-
+                
                 m_swapchainImages.insert(std::make_pair(swapchain.handle, std::move(swapchainImages)));
             }
         }

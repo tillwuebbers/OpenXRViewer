@@ -1,7 +1,12 @@
 ﻿# Add source to this project's executable.
 file(GLOB XR_DEMO_HEADERS "xr_demo/*.h")
 file(GLOB XR_DEMO_SOURCE "xr_demo/*.cpp")
-add_executable (OpenXRViewer ${XR_DEMO_HEADERS} ${XR_DEMO_SOURCE} "OpenXRViewer.cpp" "OpenXRViewer.h")
+file(GLOB DESKTOP_HEADERS "desktop/*.h")
+file(GLOB DESKTOP_SOURCE "desktop/*.cpp")
+add_executable (OpenXRViewer ${XR_DEMO_HEADERS} ${XR_DEMO_SOURCE} ${DESKTOP_HEADERS} ${DESKTOP_SOURCE} "OpenXRViewer.cpp" "OpenXRViewer.h")
+
+# turning this off will show the default openxr demo instead (only useful for testing purposes)
+add_definitions(-DUSE_CUSTOM_GRAPHICS_PLUGIN)
 
 # directx
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/libraries/DirectX-Headers/include/directx")
