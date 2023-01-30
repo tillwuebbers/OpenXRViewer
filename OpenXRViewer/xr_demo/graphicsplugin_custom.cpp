@@ -19,10 +19,93 @@
 
 #include "d3d_common.h"
 
+#undef min
+#undef max
+
+#define TINYGLTF_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#define TINYGLTF_USE_CPP14
+#include "../import/tiny_gltf.h"
+using namespace tinygltf;
+
 using namespace Microsoft::WRL;
 using namespace DirectX;
 
 namespace {
+    struct SphereVertex
+    {
+        XrVector3f position;
+        XrVector3f color;
+        XrVector2f texCoord;
+        //XrVector3f normal;
+    };
+
+    struct SphereMesh
+    {
+		std::vector<SphereVertex> vertices;
+		std::vector<uint16_t> indices;
+    };
+
+    template <typename T>
+    const T* ReadBuffer(Model& model, Accessor& accessor)
+    {
+        BufferView& bufferView = model.bufferViews[accessor.bufferView];
+        Buffer& buffer = model.buffers[bufferView.buffer];
+        return reinterpret_cast<T*>(&buffer.data[bufferView.byteOffset + accessor.byteOffset]);
+    }
+
+    void LoadSphere(SphereMesh& mesh)
+    {
+        Model model;
+        TinyGLTF loader;
+        std::string err;
+        std::string warn;
+
+        bool ret = loader.LoadBinaryFromFile(&model, &err, &warn, "models/sphere.glb");
+
+        if (!warn.empty())
+        {
+            OutputDebugStringA(std::format("Warn: {}\n", warn).c_str());
+        }
+
+        if (!err.empty())
+        {
+            OutputDebugStringA(std::format("Err: {}\n", err).c_str());
+        }
+
+        if (!ret)
+        {
+            OutputDebugStringA(std::format("Failed to parse glTF\n").c_str());
+        }
+
+        Primitive& prim = model.meshes[0].primitives[0];
+		Accessor& indices = model.accessors[prim.indices];
+		Accessor& positions = model.accessors[prim.attributes["POSITION"]];
+		Accessor& normals = model.accessors[prim.attributes["NORMAL"]];
+		Accessor& texCoords = model.accessors[prim.attributes["TEXCOORD_0"]];
+
+        assert(indices.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT);
+        assert(indices.type == TINYGLTF_TYPE_SCALAR);
+
+        mesh.indices.resize(indices.count);
+        const uint16_t* indexData = ReadBuffer<uint16_t>(model, indices);
+		for (size_t i = 0; i < indices.count; i++)
+		{
+			mesh.indices[i] = indexData[i];
+		}
+
+        mesh.vertices.resize(positions.count);
+		for (size_t i = 0; i < positions.count; i++)
+		{
+			SphereVertex& vertex = mesh.vertices[i];
+			vertex.position = ReadBuffer<XrVector3f>(model, positions)[i];
+            vertex.color = XrVector3f{1., 1., 1.};
+			vertex.texCoord = ReadBuffer<XrVector2f>(model, texCoords)[i];
+            //vertex.normal = ReadBuffer<XrVector3f>(model, normals)[i];
+		}
+    }
+
     void InitializeD3D12DeviceForAdapter(IDXGIAdapter1* adapter, D3D_FEATURE_LEVEL minimumFeatureLevel, ID3D12Device** device) {
 #if !defined(NDEBUG)
         ComPtr<ID3D12Debug> debugCtrl;
@@ -66,6 +149,34 @@ namespace {
         buffDesc.SampleDesc.Count = 1;
         buffDesc.SampleDesc.Quality = 0;
         buffDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        buffDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+        ComPtr<ID3D12Resource> buffer;
+        CHECK_HRCMD(d3d12Device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &buffDesc, d3d12ResourceState, nullptr,
+            __uuidof(ID3D12Resource),
+            reinterpret_cast<void**>(buffer.ReleaseAndGetAddressOf())));
+        return buffer;
+    }
+
+    ComPtr<ID3D12Resource> CreateTexture(ID3D12Device* d3d12Device, uint32_t w, uint32_t h, D3D12_HEAP_TYPE heapType) {
+        D3D12_RESOURCE_STATES d3d12ResourceState = D3D12_RESOURCE_STATE_COMMON;
+
+        D3D12_HEAP_PROPERTIES heapProp{};
+        heapProp.Type = heapType;
+        heapProp.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+        heapProp.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+
+        D3D12_RESOURCE_DESC buffDesc{};
+        buffDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        buffDesc.Alignment = 0;
+        buffDesc.Width = w;
+        buffDesc.Height = h;
+        buffDesc.DepthOrArraySize = 1;
+        buffDesc.MipLevels = 1;
+        buffDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        buffDesc.SampleDesc.Count = 1;
+        buffDesc.SampleDesc.Quality = 0;
+        buffDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         buffDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
         ComPtr<ID3D12Resource> buffer;
@@ -167,10 +278,12 @@ namespace {
 struct PSVertex {
     float4 Pos : SV_POSITION;
     float3 Color : COLOR0;
+    float2 UV : TEXCOORD0;
 };
 struct Vertex {
     float3 Pos : POSITION;
     float3 Color : COLOR0;
+    float2 UV : TEXCOORD0;
 };
 cbuffer ModelConstantBuffer : register(b0) {
     float4x4 Model;
@@ -178,16 +291,19 @@ cbuffer ModelConstantBuffer : register(b0) {
 cbuffer ViewProjectionConstantBuffer : register(b1) {
     float4x4 ViewProjection;
 };
+Texture2D tex : register(t2);
+SamplerState texSampler : register(s0);
 
 PSVertex MainVS(Vertex input) {
     PSVertex output;
     output.Pos = mul(mul(float4(input.Pos, 1), Model), ViewProjection);
     output.Color = input.Color;
+    output.UV = input.UV;
     return output;
 }
 
 float4 MainPS(PSVertex input) : SV_TARGET {
-    return float4(input.Color, 1);
+    return tex.Sample(texSampler, input.UV);
 }
     )_";
 
@@ -243,8 +359,23 @@ float4 MainPS(PSVertex input) : SV_TARGET {
                 CHECK_HRCMD(m_device->CreateDescriptorHeap(&heapDesc, __uuidof(ID3D12DescriptorHeap),
                     reinterpret_cast<void**>(m_dsvHeap.ReleaseAndGetAddressOf())));
             }
+            {
+                D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+                heapDesc.NumDescriptors = 1;
+                heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+                heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+                CHECK_HRCMD(m_device->CreateDescriptorHeap(&heapDesc, __uuidof(ID3D12DescriptorHeap),
+                    reinterpret_cast<void**>(m_cbvSrvHeap.ReleaseAndGetAddressOf())));
+            }
 
-            D3D12_ROOT_PARAMETER rootParams[2];
+            std::vector<D3D12_DESCRIPTOR_RANGE> ranges{ 1 };
+			ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+			ranges[0].NumDescriptors = 1;
+			ranges[0].BaseShaderRegister = 2;
+			ranges[0].RegisterSpace = 0;
+			ranges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+            D3D12_ROOT_PARAMETER rootParams[3];
             rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
             rootParams[0].Descriptor.ShaderRegister = 0;
             rootParams[0].Descriptor.RegisterSpace = 0;
@@ -253,11 +384,34 @@ float4 MainPS(PSVertex input) : SV_TARGET {
             rootParams[1].Descriptor.ShaderRegister = 1;
             rootParams[1].Descriptor.RegisterSpace = 0;
             rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+            rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+			rootParams[2].DescriptorTable.pDescriptorRanges = ranges.data();
+			rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+			rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+
+            D3D12_STATIC_SAMPLER_DESC texSampler = {};
+            texSampler.Filter = D3D12_FILTER_ANISOTROPIC;
+            texSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+            texSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+            texSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+            texSampler.MipLODBias = 0;
+            texSampler.MaxAnisotropy = 16;
+            texSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+            texSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+            texSampler.MinLOD = 0.0f;
+            texSampler.MaxLOD = D3D12_FLOAT32_MAX;
+            texSampler.ShaderRegister = 0;
+            texSampler.RegisterSpace = 0;
+            texSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+            std::vector<D3D12_STATIC_SAMPLER_DESC> samplers = { texSampler };
 
             D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc{};
             rootSignatureDesc.NumParameters = (UINT)ArraySize(rootParams);
             rootSignatureDesc.pParameters = rootParams;
             rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+			rootSignatureDesc.NumStaticSamplers = (UINT)samplers.size();
+			rootSignatureDesc.pStaticSamplers = samplers.data();
 
             ComPtr<ID3DBlob> rootSignatureBlob;
             ComPtr<ID3DBlob> error;
@@ -276,6 +430,7 @@ float4 MainPS(PSVertex input) : SV_TARGET {
                 __uuidof(ID3D12GraphicsCommandList),
                 reinterpret_cast<void**>(cmdList.ReleaseAndGetAddressOf())));
 
+            // Upload cubes
             ComPtr<ID3D12Resource> cubeVertexBufferUpload;
             m_cubeVertexBuffer = CreateBuffer(m_device.Get(), sizeof(Geometry::c_cubeVertices), D3D12_HEAP_TYPE_DEFAULT);
             {
@@ -287,8 +442,7 @@ float4 MainPS(PSVertex input) : SV_TARGET {
                 memcpy(data, Geometry::c_cubeVertices, sizeof(Geometry::c_cubeVertices));
                 cubeVertexBufferUpload->Unmap(0, nullptr);
 
-                cmdList->CopyBufferRegion(m_cubeVertexBuffer.Get(), 0, cubeVertexBufferUpload.Get(), 0,
-                    sizeof(Geometry::c_cubeVertices));
+                cmdList->CopyBufferRegion(m_cubeVertexBuffer.Get(), 0, cubeVertexBufferUpload.Get(), 0, sizeof(Geometry::c_cubeVertices));
             }
 
             ComPtr<ID3D12Resource> cubeIndexBufferUpload;
@@ -304,6 +458,93 @@ float4 MainPS(PSVertex input) : SV_TARGET {
 
                 cmdList->CopyBufferRegion(m_cubeIndexBuffer.Get(), 0, cubeIndexBufferUpload.Get(), 0, sizeof(Geometry::c_cubeIndices));
             }
+
+            // Load and upload sphere
+            SphereMesh sphere{};
+            LoadSphere(sphere);
+            m_sphereVertexCount = sphere.vertices.size();
+            m_sphereIndexCount = sphere.indices.size();
+
+            ComPtr<ID3D12Resource> sphereVertexBufferUpload;
+			size_t sphereVertexBufferSize = sphere.vertices.size() * sizeof(SphereVertex);
+            m_sphereVertexBuffer = CreateBuffer(m_device.Get(), sphereVertexBufferSize, D3D12_HEAP_TYPE_DEFAULT);
+            {
+                sphereVertexBufferUpload = CreateBuffer(m_device.Get(), sphereVertexBufferSize, D3D12_HEAP_TYPE_UPLOAD);
+
+                void* data;
+                const D3D12_RANGE readRange{ 0, 0 };
+                CHECK_HRCMD(sphereVertexBufferUpload->Map(0, &readRange, &data));
+                memcpy(data, sphere.vertices.data(), sphereVertexBufferSize);
+                sphereVertexBufferUpload->Unmap(0, nullptr);
+
+                cmdList->CopyBufferRegion(m_sphereVertexBuffer.Get(), 0, sphereVertexBufferUpload.Get(), 0, sphereVertexBufferSize);
+            }
+
+            ComPtr<ID3D12Resource> sphereIndexBufferUpload;
+			size_t sphereIndexBufferSize = sphere.indices.size() * sizeof(uint16_t);
+            m_sphereIndexBuffer = CreateBuffer(m_device.Get(), sphereIndexBufferSize, D3D12_HEAP_TYPE_DEFAULT);
+            {
+                sphereIndexBufferUpload = CreateBuffer(m_device.Get(), sphereIndexBufferSize, D3D12_HEAP_TYPE_UPLOAD);
+
+                void* data;
+                const D3D12_RANGE readRange{ 0, 0 };
+                CHECK_HRCMD(sphereIndexBufferUpload->Map(0, &readRange, &data));
+                memcpy(data, sphere.indices.data(), sphereIndexBufferSize);
+                sphereIndexBufferUpload->Unmap(0, nullptr);
+
+                cmdList->CopyBufferRegion(m_sphereIndexBuffer.Get(), 0, sphereIndexBufferUpload.Get(), 0, sphereIndexBufferSize);
+            }
+
+            // Upload Texture
+            ComPtr<ID3D12Resource> textureUpload;
+			{
+				std::vector<uint8_t> textureData;
+				int textureWidth, textureHeight, textureChannels;
+				stbi_uc* pixels = stbi_load("textures/Wolfstein.jpg", &textureWidth, &textureHeight, &textureChannels, STBI_rgb_alpha);
+				CHECK(pixels != nullptr);
+				textureData.resize(textureWidth * textureHeight * 4);
+				memcpy(textureData.data(), pixels, textureData.size());
+				stbi_image_free(pixels);
+
+				m_texture = CreateTexture(m_device.Get(), textureWidth, textureHeight, D3D12_HEAP_TYPE_DEFAULT);
+				{
+					textureUpload = CreateBuffer(m_device.Get(), textureData.size(), D3D12_HEAP_TYPE_UPLOAD);
+
+					void* data;
+					const D3D12_RANGE readRange{ 0, 0 };
+					CHECK_HRCMD(textureUpload->Map(0, &readRange, &data));
+					memcpy(data, textureData.data(), textureData.size());
+					textureUpload->Unmap(0, nullptr);
+                    
+                    // Copy texture
+					D3D12_TEXTURE_COPY_LOCATION dst = {};
+					dst.pResource = m_texture.Get();
+					dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+					dst.SubresourceIndex = 0;
+                    
+					D3D12_TEXTURE_COPY_LOCATION src = {};
+					src.pResource = textureUpload.Get();
+					src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+					src.PlacedFootprint.Offset = 0;
+					D3D12_RESOURCE_DESC textureDesc = m_texture->GetDesc();
+					
+					src.PlacedFootprint.Footprint.Format = textureDesc.Format;
+					src.PlacedFootprint.Footprint.Width = textureDesc.Width;
+					src.PlacedFootprint.Footprint.Height = textureDesc.Height;
+					src.PlacedFootprint.Footprint.Depth = 1;
+					src.PlacedFootprint.Footprint.RowPitch = (textureDesc.Width * 4 + 255) & ~255;
+                    
+					cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+                    
+				}
+
+                D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+                srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+				srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                srvDesc.Texture2D.MipLevels = 1;
+                m_device->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
+			}
             
             CHECK_HRCMD(cmdList->Close());
             ID3D12CommandList* cmdLists[] = { cmdList.Get() };
@@ -367,10 +608,9 @@ float4 MainPS(PSVertex input) : SV_TARGET {
             }
 
             const D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {
-                {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT,
-                 D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-                {"COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-                 0},
+                {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+                {"COLOR"   , 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+				{"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
             };
 
             D3D12_GRAPHICS_PIPELINE_STATE_DESC pipelineStateDesc{};
@@ -526,6 +766,10 @@ float4 MainPS(PSVertex input) : SV_TARGET {
             }
             m_device->CreateDepthStencilView(depthStencilTexture, &depthStencilViewDesc, depthStencilView);
 
+            // Set descriptor heap
+			ID3D12DescriptorHeap* descriptorHeaps[] = { m_cbvSrvHeap.Get() };
+			cmdList->SetDescriptorHeaps((UINT)ArraySize(descriptorHeaps), descriptorHeaps);
+
             // Clear swapchain and depth buffer. NOTE: This will clear the entire render target view, not just the specified view.
             cmdList->ClearRenderTargetView(renderTargetView, static_cast<const FLOAT*>(m_clearColor.data()), 0, nullptr);
             cmdList->ClearDepthStencilView(depthStencilView, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -551,19 +795,22 @@ float4 MainPS(PSVertex input) : SV_TARGET {
 
             cmdList->SetGraphicsRootConstantBufferView(1, viewProjectionCBuffer->GetGPUVirtualAddress());
 
+            // Bind texture
+			cmdList->SetGraphicsRootDescriptorTable(2, m_cbvSrvHeap->GetGPUDescriptorHandleForHeapStart());
+
             // Set cube primitive data.
-            const D3D12_VERTEX_BUFFER_VIEW vertexBufferView[] = {
-                {m_cubeVertexBuffer->GetGPUVirtualAddress(), sizeof(Geometry::c_cubeVertices), sizeof(Geometry::Vertex)} };
-            cmdList->IASetVertexBuffers(0, (UINT)ArraySize(vertexBufferView), vertexBufferView);
+            {
+                const D3D12_VERTEX_BUFFER_VIEW vertexBufferView[] = {{m_cubeVertexBuffer->GetGPUVirtualAddress(), sizeof(Geometry::c_cubeVertices), sizeof(Geometry::Vertex)}};
+                cmdList->IASetVertexBuffers(0, (UINT)ArraySize(vertexBufferView), vertexBufferView);
 
-            D3D12_INDEX_BUFFER_VIEW indexBufferView{ m_cubeIndexBuffer->GetGPUVirtualAddress(), sizeof(Geometry::c_cubeIndices),
-                                                    DXGI_FORMAT_R16_UINT };
-            cmdList->IASetIndexBuffer(&indexBufferView);
+                D3D12_INDEX_BUFFER_VIEW indexBufferView{ m_cubeIndexBuffer->GetGPUVirtualAddress(), sizeof(Geometry::c_cubeIndices), DXGI_FORMAT_R16_UINT };
+                cmdList->IASetIndexBuffer(&indexBufferView);
 
-            cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            }
 
             constexpr uint32_t cubeCBufferSize = AlignTo<D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT>(sizeof(ModelConstantBuffer));
-            swapchainContext.RequestModelCBuffer(static_cast<uint32_t>(cubeCBufferSize * cubes.size()));
+            swapchainContext.RequestModelCBuffer(static_cast<uint32_t>(cubeCBufferSize * (cubes.size() + 1)));
             ID3D12Resource* modelCBuffer = swapchainContext.GetModelCBuffer();
 
             // Render each cube
@@ -571,8 +818,7 @@ float4 MainPS(PSVertex input) : SV_TARGET {
             for (const Cube& cube : cubes) {
                 // Compute and update the model transform.
                 ModelConstantBuffer model;
-                XMStoreFloat4x4(&model.Model,
-                    XMMatrixTranspose(XMMatrixScaling(cube.Scale.x, cube.Scale.y, cube.Scale.z) * LoadXrPose(cube.Pose)));
+                XMStoreFloat4x4(&model.Model, XMMatrixTranspose(XMMatrixScaling(cube.Scale.x, cube.Scale.y, cube.Scale.z) * LoadXrPose(cube.Pose)));
                 {
                     uint8_t* data;
                     const D3D12_RANGE readRange{ 0, 0 };
@@ -590,6 +836,37 @@ float4 MainPS(PSVertex input) : SV_TARGET {
                 offset += cubeCBufferSize;
             }
 
+			// Set sphere primitive data.
+            {
+                const D3D12_VERTEX_BUFFER_VIEW vertexBufferView[] = { {m_sphereVertexBuffer->GetGPUVirtualAddress(), m_sphereVertexCount * sizeof(Geometry::Vertex), sizeof(Geometry::Vertex)}};
+                cmdList->IASetVertexBuffers(0, (UINT)ArraySize(vertexBufferView), vertexBufferView);
+
+                D3D12_INDEX_BUFFER_VIEW indexBufferView{ m_sphereIndexBuffer->GetGPUVirtualAddress(), m_sphereIndexCount * sizeof(uint16_t), DXGI_FORMAT_R16_UINT};
+                cmdList->IASetIndexBuffer(&indexBufferView);
+
+                cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            }
+
+            // Render sphere
+            {
+                // Compute and update the model transform.
+                ModelConstantBuffer model;
+                XMStoreFloat4x4(&model.Model, XMMatrixTranspose(XMMatrixScaling(.1f, .1f, .1f)));
+                {
+                    uint8_t* data;
+                    const D3D12_RANGE readRange{ 0, 0 };
+                    CHECK_HRCMD(modelCBuffer->Map(0, &readRange, reinterpret_cast<void**>(&data)));
+                    memcpy(data + offset, &model, sizeof(model));
+                    const D3D12_RANGE writeRange{ offset, offset + cubeCBufferSize };
+                    modelCBuffer->Unmap(0, &writeRange);
+                }
+
+                cmdList->SetGraphicsRootConstantBufferView(0, modelCBuffer->GetGPUVirtualAddress() + offset);
+                cmdList->DrawIndexedInstanced(m_sphereIndexCount, 1, 0, 0, 0);
+
+                offset += cubeCBufferSize;
+            }
+            
             // Copy result to desktop window preview
             if (!m_previewSwapchainInitialized)
             {
@@ -643,8 +920,14 @@ float4 MainPS(PSVertex input) : SV_TARGET {
         std::map<DXGI_FORMAT, ComPtr<ID3D12PipelineState>> m_pipelineStates;
         ComPtr<ID3D12Resource> m_cubeVertexBuffer;
         ComPtr<ID3D12Resource> m_cubeIndexBuffer;
+        ComPtr<ID3D12Resource> m_sphereVertexBuffer;
+        ComPtr<ID3D12Resource> m_sphereIndexBuffer;
+        ComPtr<ID3D12Resource> m_texture;
+        UINT m_sphereVertexCount;
+        UINT m_sphereIndexCount;
         ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
         ComPtr<ID3D12DescriptorHeap> m_dsvHeap;
+        ComPtr<ID3D12DescriptorHeap> m_cbvSrvHeap;
         std::array<float, 4> m_clearColor;
         
         bool m_previewSwapchainInitialized = false;

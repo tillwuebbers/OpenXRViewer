@@ -9,6 +9,7 @@ namespace Geometry {
 struct Vertex {
     XrVector3f Position;
     XrVector3f Color;
+    XrVector2f TexCoord;
 };
 
 constexpr XrVector3f Red{1, 0, 0};
