@@ -303,6 +303,9 @@ PSVertex MainVS(Vertex input) {
 }
 
 float4 MainPS(PSVertex input) : SV_TARGET {
+    int checkerboardCount = 64;
+    float checkerboard = (round(input.UV.x * checkerboardCount) + round(input.UV.y * checkerboardCount)) % 2 == 0 ? 0.f : 1.f;
+    return float4(checkerboard, checkerboard, checkerboard, 1);
     return tex.Sample(texSampler, input.UV);
 }
     )_";
@@ -500,7 +503,7 @@ float4 MainPS(PSVertex input) : SV_TARGET {
 			{
 				std::vector<uint8_t> textureData;
 				int textureWidth, textureHeight, textureChannels;
-				stbi_uc* pixels = stbi_load("textures/Wolfstein.jpg", &textureWidth, &textureHeight, &textureChannels, STBI_rgb_alpha);
+				stbi_uc* pixels = stbi_load("textures/xyz.png", &textureWidth, &textureHeight, &textureChannels, STBI_rgb_alpha);
 				CHECK(pixels != nullptr);
 				textureData.resize(textureWidth * textureHeight * 4);
 				memcpy(textureData.data(), pixels, textureData.size());

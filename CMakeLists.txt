@@ -5,3 +5,4 @@ project ("OpenXRViewer")
 
 # Include sub-projects.
 add_subdirectory ("OpenXRViewer")
+add_subdirectory ("EquirectConverter")
