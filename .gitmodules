@@ -7,3 +7,6 @@
 [submodule "OpenXRViewer/libraries/DirectX-Headers"]
 	path = OpenXRViewer/libraries/DirectX-Headers
 	url = https://github.com/microsoft/DirectX-Headers
+[submodule "EquirectConverter/libraries/stb"]
+	path = EquirectConverter/libraries/stb
+	url = https://github.com/nothings/stb
