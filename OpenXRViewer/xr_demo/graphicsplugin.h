@@ -42,6 +42,8 @@ struct IGraphicsPlugin {
 
     // Perform required steps after updating Options
     virtual void UpdateOptions(const std::shared_ptr<struct Options>& options) = 0;
+
+    virtual void LoadShaders() = 0;
 };
 
 // Create a graphics plugin for the graphics API specified in the options.

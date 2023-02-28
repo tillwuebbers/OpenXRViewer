@@ -18,6 +18,7 @@
 #include <D3Dcompiler.h>
 
 #include "d3d_common.h"
+#include "../libraries/directx-tex/DDSTextureLoader12.h"
 
 #undef min
 #undef max
@@ -172,7 +173,7 @@ namespace {
         buffDesc.Width = w;
         buffDesc.Height = h;
         buffDesc.DepthOrArraySize = 1;
-        buffDesc.MipLevels = 1;
+        buffDesc.MipLevels = 0;
         buffDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         buffDesc.SampleDesc.Count = 1;
         buffDesc.SampleDesc.Quality = 0;
@@ -273,52 +274,79 @@ namespace {
         uint64_t m_fenceValue = 0;
     };
 
-    // Separate entrypoints for the vertex and pixel shader functions.
-    constexpr char CustomShaderHlsl[] = R"_(
-struct PSVertex {
-    float4 Pos : SV_POSITION;
-    float3 Color : COLOR0;
-    float2 UV : TEXCOORD0;
-};
-struct Vertex {
-    float3 Pos : POSITION;
-    float3 Color : COLOR0;
-    float2 UV : TEXCOORD0;
-};
-cbuffer ModelConstantBuffer : register(b0) {
-    float4x4 Model;
-};
-cbuffer ViewProjectionConstantBuffer : register(b1) {
-    float4x4 ViewProjection;
-};
-Texture2D tex : register(t2);
-SamplerState texSampler : register(s0);
+    bool LoadShadersFromFile(const wchar_t* shaderFileName, ComPtr<ID3DBlob>& vertexBytes, ComPtr<ID3DBlob>& pixelBytes, std::string& shaderError)
+    {
+        OutputDebugString(L"Loading shaders...\n");
 
-PSVertex MainVS(Vertex input) {
-    PSVertex output;
-    output.Pos = mul(mul(float4(input.Pos, 1), Model), ViewProjection);
-    output.Color = input.Color;
-    output.UV = input.UV;
-    return output;
-}
+        UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+        std::wstring path = std::wstring(L"../../../../OpenXRViewer/shaders/");
+        path.append(shaderFileName);
+        const wchar_t* shaderPath = path.c_str();
+        Sleep(100);
 
-float4 MainPS(PSVertex input) : SV_TARGET {
-    int checkerboardCount = 64;
-    float checkerboard = (round(input.UV.x * checkerboardCount) + round(input.UV.y * checkerboardCount)) % 2 == 0 ? 0.f : 1.f;
-    return float4(checkerboard, checkerboard, checkerboard, 1);
-    return tex.Sample(texSampler, input.UV);
-}
-    )_";
+        time_t startTime = time(nullptr);
+        bool canOpen = false;
+        while (!canOpen)
+        {
+            std::ifstream fileStream(shaderPath, std::ios::in);
+
+            canOpen = fileStream.good();
+            fileStream.close();
+
+            if (!canOpen)
+            {
+                time_t elapsedSeconds = time(nullptr) - startTime;
+                if (elapsedSeconds > 5)
+                {
+                    throw std::format(L"Could not open shader file {}", shaderPath).c_str();
+                }
+                Sleep(100);
+            }
+        }
+
+        ComPtr<ID3DBlob> vsErrors;
+        ComPtr<ID3D10Blob> psErrors;
+
+        shaderError.clear();
+        HRESULT hr = D3DCompileFromFile(shaderPath, nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "MainVS", "vs_5_1", compileFlags, 0, &vertexBytes, &vsErrors);
+
+        if (vsErrors)
+        {
+            shaderError = std::format("Vertex Shader Errors:\n{}\n", (LPCSTR)vsErrors->GetBufferPointer());
+            OutputDebugString(std::format(L"{}\n", shaderPath).c_str());
+            OutputDebugStringA(shaderError.c_str());
+        }
+        if (FAILED(hr)) return false;
+
+        hr = D3DCompileFromFile(shaderPath, nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "MainPS", "ps_5_1", compileFlags, 0, &pixelBytes, &psErrors);
+        if (psErrors)
+        {
+            shaderError = std::format("Pixel Shader Errors:\n{}\n", (LPCSTR)psErrors->GetBufferPointer());
+            OutputDebugString(std::format(L"{}\n", shaderPath).c_str());
+            OutputDebugStringA(shaderError.c_str());
+        }
+        if (FAILED(hr)) return false;
+    }
 
     struct D3D12GraphicsPlugin : public IGraphicsPlugin {
         D3D12GraphicsPlugin(const std::shared_ptr<Options>& options, std::shared_ptr<IPlatformPlugin>)
-            : m_vertexShaderBytes(CompileShader(CustomShaderHlsl, "MainVS", "vs_5_1")),
-            m_pixelShaderBytes(CompileShader(CustomShaderHlsl, "MainPS", "ps_5_1")),
-            m_clearColor(options->GetBackgroundClearColor()) {}
+            : m_clearColor(options->GetBackgroundClearColor())
+        {
+            LoadShaders();
+        }
 
         ~D3D12GraphicsPlugin() override { CloseHandle(m_fenceEvent); }
 
         std::vector<std::string> GetInstanceExtensions() const override { return { XR_KHR_D3D12_ENABLE_EXTENSION_NAME }; }
+
+        void LoadShaders()
+        {
+            std::string shaderError{};
+            if (LoadShadersFromFile(L"photoviewer.hlsl", m_vertexShaderBytes, m_pixelShaderBytes, shaderError))
+            {
+                m_pipelineStates.clear();
+            }
+        }
 
         void InitializeDevice(XrInstance instance, XrSystemId systemId) override {
             PFN_xrGetD3D12GraphicsRequirementsKHR pfnGetD3D12GraphicsRequirementsKHR = nullptr;
@@ -501,51 +529,34 @@ float4 MainPS(PSVertex input) : SV_TARGET {
             // Upload Texture
             ComPtr<ID3D12Resource> textureUpload;
 			{
-				std::vector<uint8_t> textureData;
+				/*std::vector<uint8_t> textureData;
 				int textureWidth, textureHeight, textureChannels;
 				stbi_uc* pixels = stbi_load("textures/xyz.png", &textureWidth, &textureHeight, &textureChannels, STBI_rgb_alpha);
 				CHECK(pixels != nullptr);
 				textureData.resize(textureWidth * textureHeight * 4);
 				memcpy(textureData.data(), pixels, textureData.size());
-				stbi_image_free(pixels);
+				stbi_image_free(pixels);*/
 
-				m_texture = CreateTexture(m_device.Get(), textureWidth, textureHeight, D3D12_HEAP_TYPE_DEFAULT);
+                std::unique_ptr<uint8_t[]> data{};
+                std::vector<D3D12_SUBRESOURCE_DATA> subresources{};
+                HRESULT hr = LoadDDSTextureFromFile(m_device.Get(), L"textures/xyz.dds", &m_texture, data, subresources);
+                assert(!FAILED(hr));
+
+				//m_texture = CreateTexture(m_device.Get(), textureWidth, textureHeight, D3D12_HEAP_TYPE_DEFAULT);
 				{
-					textureUpload = CreateBuffer(m_device.Get(), textureData.size(), D3D12_HEAP_TYPE_UPLOAD);
+					textureUpload = CreateBuffer(m_device.Get(), GetRequiredIntermediateSize(m_texture.Get(), 0, subresources.size()), D3D12_HEAP_TYPE_UPLOAD);
 
-					void* data;
-					const D3D12_RANGE readRange{ 0, 0 };
-					CHECK_HRCMD(textureUpload->Map(0, &readRange, &data));
-					memcpy(data, textureData.data(), textureData.size());
-					textureUpload->Unmap(0, nullptr);
-                    
-                    // Copy texture
-					D3D12_TEXTURE_COPY_LOCATION dst = {};
-					dst.pResource = m_texture.Get();
-					dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-					dst.SubresourceIndex = 0;
-                    
-					D3D12_TEXTURE_COPY_LOCATION src = {};
-					src.pResource = textureUpload.Get();
-					src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-					src.PlacedFootprint.Offset = 0;
-					D3D12_RESOURCE_DESC textureDesc = m_texture->GetDesc();
-					
-					src.PlacedFootprint.Footprint.Format = textureDesc.Format;
-					src.PlacedFootprint.Footprint.Width = textureDesc.Width;
-					src.PlacedFootprint.Footprint.Height = textureDesc.Height;
-					src.PlacedFootprint.Footprint.Depth = 1;
-					src.PlacedFootprint.Footprint.RowPitch = (textureDesc.Width * 4 + 255) & ~255;
-                    
-					cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-                    
+					UpdateSubresources(cmdList.Get(), m_texture.Get(), textureUpload.Get(), 0, 0, subresources.size(), subresources.data());
+
+                    CD3DX12_RESOURCE_BARRIER transition = CD3DX12_RESOURCE_BARRIER::Transition(m_texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                    cmdList->ResourceBarrier(1, &transition);
 				}
 
                 D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
                 srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-				srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+				srvDesc.Format = DXGI_FORMAT_BC1_UNORM;
                 srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-                srvDesc.Texture2D.MipLevels = 1;
+                srvDesc.Texture2D.MipLevels = subresources.size();
                 m_device->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
 			}
             
@@ -613,7 +624,7 @@ float4 MainPS(PSVertex input) : SV_TARGET {
             const D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {
                 {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
                 {"COLOR"   , 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-				{"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+                {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
             };
 
             D3D12_GRAPHICS_PIPELINE_STATE_DESC pipelineStateDesc{};
@@ -909,8 +920,8 @@ float4 MainPS(PSVertex input) : SV_TARGET {
         void UpdateOptions(const std::shared_ptr<Options>& options) override { m_clearColor = options->GetBackgroundClearColor(); }
 
     private:
-        const ComPtr<ID3DBlob> m_vertexShaderBytes;
-        const ComPtr<ID3DBlob> m_pixelShaderBytes;
+        ComPtr<ID3DBlob> m_vertexShaderBytes;
+        ComPtr<ID3DBlob> m_pixelShaderBytes;
         ComPtr<ID3D12Device> m_device;
         ComPtr<ID3D12CommandQueue> m_cmdQueue;
         ComPtr<ID3D12Fence> m_fence;

@@ -10,6 +10,51 @@
 #include "platformplugin.h"
 #include "openxr_program.h"
 
+#include <mutex>
+
+struct UpdateData
+{
+    bool reloadShaders = false;
+};
+
+std::mutex updateDataMutex;
+UpdateData updateData{};
+
+// Watch development files for quick reload of shaders
+DWORD WINAPI FileWatcherThread(LPVOID lpParameter)
+{
+    HANDLE changeNotificationHandle = FindFirstChangeNotification(L"../../../../OpenXRViewer/shaders", FALSE, FILE_NOTIFY_CHANGE_LAST_WRITE);
+    if (changeNotificationHandle == INVALID_HANDLE_VALUE)
+    {
+        OutputDebugString(L"Folder change notification failed");
+        return 1;
+    }
+
+    while (true)
+    {
+        switch (WaitForSingleObject(changeNotificationHandle, INFINITE))
+        {
+        case WAIT_OBJECT_0:
+            updateDataMutex.lock();
+            updateData.reloadShaders = true;
+            updateDataMutex.unlock();
+
+            if (!FindNextChangeNotification(changeNotificationHandle))
+            {
+                OutputDebugString(L"Folder change notification failed");
+                return 1;
+            }
+            break;
+        default:
+            OutputDebugString(L"Folder change notification failed");
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+
 void ShowHelp() {
     // TODO: Improve/update when things are more settled.
     Log::Write(Log::Level::Info,
@@ -82,6 +127,9 @@ bool UpdateOptionsFromCommandLine(Options& options, int argc, char* argv[]) {
 
 int RunDemo(int argc, char* argv[])
 {
+    DWORD fileWatcherThreadID;
+    HANDLE fileWatcherThreadHandle = CreateThread(0, 0, FileWatcherThread, 0, 0, &fileWatcherThreadID);
+
     try {
         // Parse command-line arguments into Options.
         std::shared_ptr<Options> options = std::make_shared<Options>();
@@ -125,6 +173,13 @@ int RunDemo(int argc, char* argv[])
 
             while (!quitKeyPressed) {
                 bool exitRenderLoop = false;
+                updateDataMutex.lock();
+                if (updateData.reloadShaders)
+                {
+                    updateData.reloadShaders = false;
+                    graphicsPlugin->LoadShaders();
+                }
+                updateDataMutex.unlock();
                 program->PollEvents(&exitRenderLoop, &requestRestart);
                 if (exitRenderLoop) {
                     break;
@@ -142,14 +197,18 @@ int RunDemo(int argc, char* argv[])
 
         } while (!quitKeyPressed && requestRestart);
 
+        CloseHandle(fileWatcherThreadHandle);
+
         return 0;
     }
     catch (const std::exception& ex) {
         Log::Write(Log::Level::Error, ex.what());
+        CloseHandle(fileWatcherThreadHandle);
         return 1;
     }
     catch (...) {
         Log::Write(Log::Level::Error, "Unknown Error");
+        CloseHandle(fileWatcherThreadHandle);
         return 1;
     }
 }
