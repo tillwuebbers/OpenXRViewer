@@ -4,6 +4,7 @@ file(GLOB SRC_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 file(GLOB SRC_H "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h")
 add_executable(${CONVERTER_NAME} ${SRC_CPP} ${SRC_H})
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/libraries/stb/")
+include_directories("${CMAKE_CURRENT_SOURCE_DIR}/libraries/dds/")
 
 # copy files
 add_custom_command(

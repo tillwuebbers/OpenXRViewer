@@ -2,6 +2,7 @@
 
 #include "Constants.h"
 #include "Memory.h"
+#include "File.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -109,12 +110,12 @@ float KaiserWindow(float x)
 	return BesselI0(alpha * std::sqrtf(1.f - x * x)) / BesselI0(alpha);
 }
 
-unsigned char* GenerateConventionalMipLevel(MemoryArena& arena, unsigned char* source, int sourceWidth, int sourceHeight, int channelCount, MipGenerationType type)
+uint8_t* GenerateConventionalMipLevel(MemoryArena& arena, uint8_t* source, int sourceWidth, int sourceHeight, int channelCount, MipGenerationType type)
 {
 	int targetWidth = sourceWidth / 2;
 	int targetHeight = sourceHeight / 2;
 
-	unsigned char* mipMapData = NewArray(arena, unsigned char, targetWidth * targetHeight * channelCount);
+	uint8_t* mipMapData = NewArray(arena, uint8_t, targetWidth * targetHeight * channelCount);
 
 	// Point-Filtering
 	if (type == MipGenerationType::Point)
@@ -169,13 +170,23 @@ unsigned char* GenerateConventionalMipLevel(MemoryArena& arena, unsigned char* s
 	return mipMapData;
 }
 
-void AverageRect(float minX, float minY, float maxX, float maxY, int sourceWidth, int sourceHeight, int channelCount, unsigned char* sourceBase, unsigned char* target)
+void AverageRect(float minX, float minY, float maxX, float maxY, int sourceWidth, int sourceHeight, int channelCount, uint8_t* sourceBase, uint8_t* target)
 {
+	if (minX < 0.) minX = 0.;
+	if (maxX < 0.) maxX = 0.;
+	if (minX >= sourceWidth) minX = sourceWidth - 1;
+	if (maxX >= sourceWidth) maxX = sourceWidth - 1;
+	if (minY < 0.) minY = 0.;
+	if (maxY < 0.) maxY = 0.;
+	if (minY >= sourceHeight) minY = sourceHeight - 1;
+	if (maxY >= sourceHeight) maxY = sourceHeight - 1;
+
 	for (int c = 0; c < channelCount; c++)
 	{
 		int channelSum = 0;
 		int pixelCount = 0;
 
+		// TODO: this currently floors the area, which isn't perfect if we want to average a 1.5px wide area for example.
 		for (int y = static_cast<int>(minY); y < static_cast<int>(maxY); y++)
 		{
 			for (int x = static_cast<int>(minX); x < static_cast<int>(maxX); x++)
@@ -185,18 +196,25 @@ void AverageRect(float minX, float minY, float maxX, float maxY, int sourceWidth
 			}
 		}
 
-		target[c] = channelSum / pixelCount;
+		if (pixelCount == 0)
+		{
+			target[c] = sourceBase[(static_cast<int>(minY) * sourceWidth + static_cast<int>(minX)) * channelCount + c];
+		}
+		else
+		{
+			target[c] = channelSum / pixelCount;
+		}
 	}
 }
 
-unsigned char* GenerateEquirectMipLevel(MemoryArena& arena, unsigned char* source, int sourceWidth, int sourceHeight, int channelCount, MipGenerationType type)
+uint8_t* GenerateEquirectMipLevel(MemoryArena& arena, uint8_t* source, int sourceWidth, int sourceHeight, int channelCount, MipGenerationType type)
 {
 	int targetWidth = sourceWidth / 2;
 	int targetHeight = sourceHeight / 2;
 
-	unsigned char* mipMapData = NewArray(arena, unsigned char, targetWidth * targetHeight * channelCount);
+	uint8_t* mipMapData = NewArray(arena, uint8_t, targetWidth * targetHeight * channelCount);
 
-	// Point-Filtering
+	// Point-Filtering (no difference)
 	if (type == MipGenerationType::Point)
 	{
 		for (int y = 0; y < sourceHeight; y += 2)
@@ -246,8 +264,10 @@ void GenerateMipMap(const char* sourcePath, const char* targetPathPrefix, MipGen
 
 	int width;
 	int height;
-	int channelCount;
-	unsigned char* imageData = stbi_load(sourcePath, &width, &height, &channelCount, 0);
+	int originalChannelCount;
+	int channelCount = 4;
+
+	uint8_t* imageData = stbi_load(sourcePath, &width, &height, &originalChannelCount, channelCount);
 	if (imageData == nullptr)
 	{
 		std::cout << stbi_failure_reason() << std::endl;
@@ -255,18 +275,18 @@ void GenerateMipMap(const char* sourcePath, const char* targetPathPrefix, MipGen
 	}
 	size_t imageDataSize = width * height * channelCount;
 
-	// TODO: also write dds file
-
-	unsigned char* level0 = NewArray(mipMemory, unsigned char, imageDataSize);
+	uint8_t* level0 = NewArray(mipMemory, uint8_t, imageDataSize);
 	memcpy(level0, imageData, imageDataSize);
 
 	std::string pathPrefix{ targetPathPrefix };
 	std::string path0 = pathPrefix + "0.png";
-	assert(stbi_write_png(path0.c_str(), width, height, channelCount, level0, 0));
+	PrepareFileWrite(path0);
+	bool writeResult = stbi_write_png(path0.c_str(), width, height, channelCount, level0, 0);
+	assert(writeResult && "Failed to write image!");
 	
 	int mipSourceWidth = width;
 	int mipSourceHeight = height;
-	unsigned char* mipSource = level0;
+	uint8_t* mipSource = level0;
 
 	int mipLevel = 0;
 	while (mipSourceWidth >= 2 && mipSourceHeight >= 2)
@@ -286,8 +306,13 @@ void GenerateMipMap(const char* sourcePath, const char* targetPathPrefix, MipGen
 		mipLevel++;
 		
 		std::string path = pathPrefix + std::to_string(mipLevel) + ".png";
-		assert(stbi_write_png(path.c_str(), mipSourceWidth, mipSourceHeight, channelCount, mipSource, 0));
+		PrepareFileWrite(path);
+		bool writeResult = stbi_write_png(path.c_str(), mipSourceWidth, mipSourceHeight, channelCount, mipSource, 0);
+		assert(writeResult && "Failed to write image!");
 	}
+
+	std::string ddsPath = pathPrefix + "result.dds";
+	WriteDDS(ddsPath, width, height, mipLevel, mipMemory.base, mipMemory.used);
 	
 	stbi_image_free(imageData);
 }
