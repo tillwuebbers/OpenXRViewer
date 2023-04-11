@@ -24,13 +24,14 @@ void TexturePosToSphereCoord(int x, int y, int width, int height, float& theta, 
 	const float u = static_cast<float>(x) / static_cast<float>(width);
 	const float v = static_cast<float>(y) / static_cast<float>(height);
 
-	theta = u * 2.f * PI - PI;
-	phi = v * PI - PI / 2.f;
+	theta = u * PI;
+	phi = (v * PI / 2.f) - PI / 4.f;
 }
 
 void SphereCoordToTexturePos(float phi, float theta, int width, int height, int& x, int& y)
 {
-
+	x = static_cast<int>(theta / PI) * width;
+	y = static_cast<int>((phi + PI / 4.f) / PI * 2.f) * height;
 }
 
 void GenerateEquirectangularCheckerboard(const int resolutionX, const int resolutionY)
@@ -168,6 +169,26 @@ unsigned char* GenerateConventionalMipLevel(MemoryArena& arena, unsigned char* s
 	return mipMapData;
 }
 
+void AverageRect(float minX, float minY, float maxX, float maxY, int sourceWidth, int sourceHeight, int channelCount, unsigned char* sourceBase, unsigned char* target)
+{
+	for (int c = 0; c < channelCount; c++)
+	{
+		int channelSum = 0;
+		int pixelCount = 0;
+
+		for (int y = static_cast<int>(minY); y < static_cast<int>(maxY); y++)
+		{
+			for (int x = static_cast<int>(minX); x < static_cast<int>(maxX); x++)
+			{
+				channelSum += sourceBase[(y * sourceWidth + x) * channelCount + c];
+				pixelCount++;
+			}
+		}
+
+		target[c] = channelSum / pixelCount;
+	}
+}
+
 unsigned char* GenerateEquirectMipLevel(MemoryArena& arena, unsigned char* source, int sourceWidth, int sourceHeight, int channelCount, MipGenerationType type)
 {
 	int targetWidth = sourceWidth / 2;
@@ -196,22 +217,22 @@ unsigned char* GenerateEquirectMipLevel(MemoryArena& arena, unsigned char* sourc
 	// Box-Filtering
 	if (type == MipGenerationType::Box)
 	{
-		//...
-		// Point on sphere
-		float theta; // "horizontal"
-		float phi;   // "vertical"
-		TexturePosToSphereCoord(x, y, sourceWidth, sourceHeight, theta, phi);
+		for (int y = 0; y < sourceHeight; y++)
+		{
+			for (int x = 0; x < sourceWidth; x++)
+			{
+				float theta;
+				float phi;
+				TexturePosToSphereCoord(x, y, sourceWidth, sourceHeight, theta, phi);
+				float circumferenceRatio = std::abs(std::cos(phi * 2.f)); // *2 why?
 
-		// Offset point on sphere
-		float theta2;
-		float phi2;
-		TexturePosToSphereCoord(x + 1, y + 1, sourceWidth, sourceHeight, theta2, phi2);
+				float verticalPixels = 1.f;
+				float horizontalPixels = std::min(1.f / circumferenceRatio, static_cast<float>(sourceWidth));
 
-		// pixel distance in sphere coords
-		float thetaOffset = theta2 - theta;
-		float phiOffset = phi2 - phi;
-
-		
+				int targetIndex = ((y / 2) * targetWidth + (x / 2)) * channelCount;
+				AverageRect(x, y, x + horizontalPixels, y + verticalPixels, sourceWidth, sourceHeight, channelCount, source, &mipMapData[targetIndex]);
+			}
+		}
 	}
 
 	else { assert(false); return nullptr; }
