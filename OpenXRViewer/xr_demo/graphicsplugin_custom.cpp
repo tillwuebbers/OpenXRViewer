@@ -539,7 +539,7 @@ namespace {
 
                 std::unique_ptr<uint8_t[]> data{};
                 std::vector<D3D12_SUBRESOURCE_DATA> subresources{};
-                HRESULT hr = LoadDDSTextureFromFile(m_device.Get(), L"textures/xyz.dds", &m_texture, data, subresources);
+                HRESULT hr = LoadDDSTextureFromFile(m_device.Get(), L"textures/Wolfstein-test-1.dds", &m_texture, data, subresources);
                 assert(!FAILED(hr));
 
 				//m_texture = CreateTexture(m_device.Get(), textureWidth, textureHeight, D3D12_HEAP_TYPE_DEFAULT);
@@ -554,7 +554,7 @@ namespace {
 
                 D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
                 srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-				srvDesc.Format = DXGI_FORMAT_BC1_UNORM;
+				srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
                 srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
                 srvDesc.Texture2D.MipLevels = subresources.size();
                 m_device->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
@@ -704,7 +704,11 @@ namespace {
 
             auto& swapchainContext = *m_swapchainImageContextMap[swapchainImage];
             CpuWaitForFence(swapchainContext.GetFrameFenceValue());
-            m_desktopView.WriteFile();
+            if (m_desktopView.wantWriteImage)
+            {
+                m_desktopView.WriteFile();
+                m_desktopView.wantWriteImage = false;
+            }
             swapchainContext.ResetCommandAllocator();
 
             ComPtr<ID3D12GraphicsCommandList> cmdList;
@@ -888,7 +892,10 @@ namespace {
                 m_desktopView.InitSwapchain(m_device.Get(), colorTextureDesc.Format, colorTextureDesc.Width, colorTextureDesc.Height);
                 m_previewSwapchainInitialized = true;
             }
-            m_desktopView.CopyRenderResultToPreview(cmdList.Get(), colorTexture, 0);
+            if (m_desktopView.wantWriteImage)
+            {
+                m_desktopView.CopyRenderResultToPreview(cmdList.Get(), colorTexture, 0);
+            }
 
             CHECK_HRCMD(cmdList->Close());
             ID3D12CommandList* cmdLists[] = { cmdList.Get() };
