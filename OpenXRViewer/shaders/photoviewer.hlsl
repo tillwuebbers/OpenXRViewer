@@ -26,9 +26,10 @@ PSVertex MainVS(Vertex input) {
 }
 
 float4 MainPS(PSVertex input) : SV_TARGET{
-    int checkerboardCount = 64;
-    float checkerboard = (round(input.UV.x * checkerboardCount) + round(input.UV.y * checkerboardCount)) % 2 == 0 ? 0.f : 1.f;
+    float checkerboardCount = 8.;
+    float checkerboardOffset = 1. / 16.;
+    float checkerboard = (round((input.UV.x + checkerboardOffset) * checkerboardCount) + round((input.UV.y + checkerboardOffset) * checkerboardCount)) % 2 == 0 ? 0.f : 1.f;
     //return float4(checkerboard, checkerboard, checkerboard, 1);
-    return tex.SampleBias(texSampler, input.UV, 1);
-    return tex.Sample(texSampler, input.UV);
+    return tex.SampleBias(texSampler, input.UV, 2);
+    //return tex.Sample(texSampler, input.UV);
 }

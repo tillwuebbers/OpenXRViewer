@@ -559,7 +559,7 @@ namespace {
                 srvDesc.Texture2D.MipLevels = subresources.size();
                 m_device->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
 			}
-            
+
             CHECK_HRCMD(cmdList->Close());
             ID3D12CommandList* cmdLists[] = { cmdList.Get() };
             m_cmdQueue->ExecuteCommandLists((UINT)ArraySize(cmdLists), cmdLists);
@@ -704,6 +704,7 @@ namespace {
 
             auto& swapchainContext = *m_swapchainImageContextMap[swapchainImage];
             CpuWaitForFence(swapchainContext.GetFrameFenceValue());
+            m_desktopView.WriteFile();
             swapchainContext.ResetCommandAllocator();
 
             ComPtr<ID3D12GraphicsCommandList> cmdList;
