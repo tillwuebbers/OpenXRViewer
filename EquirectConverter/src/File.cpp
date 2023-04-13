@@ -16,9 +16,8 @@ bool PrepareFileWrite(const std::string& filePath)
 	}
 	else
 	{
-		bool successfulCreate = std::filesystem::create_directories(dir);
-		assert(successfulCreate && "Failed to create directory!");
-		return successfulCreate;
+		std::filesystem::create_directories(dir);
+		return true;
 	}
 }
 
