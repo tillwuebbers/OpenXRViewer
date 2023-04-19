@@ -14,6 +14,7 @@
 #include <assert.h>
 #include <cmath>
 #include <iostream>
+#include <chrono>
 
 inline float clamp01(float x)
 {
@@ -108,6 +109,12 @@ float KaiserWindow(float x)
 {
 	const float alpha = 4.f * PI;
 	return BesselI0(alpha * std::sqrtf(1.f - x * x)) / BesselI0(alpha);
+}
+
+size_t ImageOffset(size_t x, size_t y, size_t w, int channelCount = 4)
+{
+	size_t pixelOffset = y * w + x;
+	return pixelOffset * channelCount;
 }
 
 uint8_t* GenerateConventionalMipLevel(MemoryArena& arena, uint8_t* source, int sourceWidth, int sourceHeight, int channelCount, MipGenerationType type)
@@ -248,7 +255,7 @@ uint8_t* GenerateEquirectMipLevel(MemoryArena& arena, uint8_t* source, int sourc
 				float horizontalPixels = std::min(1.f / circumferenceRatio, static_cast<float>(sourceWidth));
 
 				int targetIndex = ((y / 2) * targetWidth + (x / 2)) * channelCount;
-				AverageRect(x, y, x + horizontalPixels, y + verticalPixels, sourceWidth, sourceHeight, channelCount, source, &mipMapData[targetIndex]);
+				AverageRect(x - horizontalPixels / 2.f, y - verticalPixels / 2.f, x + horizontalPixels / 2.f, y + verticalPixels / 2.f, sourceWidth, sourceHeight, channelCount, source, &mipMapData[targetIndex]);
 			}
 		}
 	}
@@ -317,9 +324,58 @@ void GenerateMipMap(const char* sourcePath, const char* targetPathPrefix, MipGen
 	stbi_image_free(imageData);
 }
 
+void CopyImageTo(const std::string& sourcePath, size_t sourceWidth, int requiredChannelCount, uint8_t* targetImage, int targetOffsetX, int targetOffsetY)
+{
+	int width;
+	int height;
+	int originalChannelCount;
+	uint8_t* imageData = stbi_load(sourcePath.c_str(), &width, &height, &originalChannelCount, requiredChannelCount);
+	if (imageData == nullptr)
+	{
+		std::cout << stbi_failure_reason() << std::endl;
+		return;
+	}
+	for (int row = 0; row < height; row++)
+	{
+		size_t targetOffset = ImageOffset(targetOffsetX, targetOffsetY + row, sourceWidth);
+		size_t sourceOffset = ImageOffset(0, row, width);
+		memcpy(&targetImage[targetOffset], &imageData[sourceOffset], width * requiredChannelCount);
+	}
+	stbi_image_free(imageData);
+}
+
+// Creates a cubemap in the "cross" layout from 6 images. Each of these images must have sourceWidth x sourceHeight pixels.
+void AssembleCubeMap(const std::string pathBase, int sourceWidth, int sourceHeight)
+{
+	int requiredChannelCount = 4;
+	MemoryArena workingMemory{};
+	uint8_t* outputImage = NewArray(workingMemory, uint8_t, (sourceWidth * 4) * (sourceHeight * 3) * requiredChannelCount);
+
+	auto measureStart = std::chrono::high_resolution_clock::now();
+
+	CopyImageTo(pathBase +    "_up.jpg", sourceWidth * 4, requiredChannelCount, outputImage, sourceWidth    , 0);
+	CopyImageTo(pathBase +  "_left.jpg", sourceWidth * 4, requiredChannelCount, outputImage,               0, sourceHeight);
+	CopyImageTo(pathBase + "_front.jpg", sourceWidth * 4, requiredChannelCount, outputImage, sourceWidth    , sourceHeight);
+	CopyImageTo(pathBase + "_right.jpg", sourceWidth * 4, requiredChannelCount, outputImage, sourceWidth * 2, sourceHeight);
+	CopyImageTo(pathBase +  "_back.jpg", sourceWidth * 4, requiredChannelCount, outputImage, sourceWidth * 3, sourceHeight);
+	CopyImageTo(pathBase +  "_down.jpg", sourceWidth * 4, requiredChannelCount, outputImage, sourceWidth    , sourceHeight * 2);
+
+	auto measureEnd = std::chrono::high_resolution_clock::now();
+	auto measureDuration = std::chrono::duration_cast<std::chrono::milliseconds>(measureEnd - measureStart);
+	std::cout << "Copy finished in: " << measureDuration.count() << "ms" << std::endl;
+
+	measureStart = std::chrono::high_resolution_clock::now();
+	stbi_write_png((pathBase + "_combined.png").c_str(), sourceWidth * 4, sourceHeight * 3, requiredChannelCount, outputImage, 0);
+	measureEnd = std::chrono::high_resolution_clock::now();
+	measureDuration = std::chrono::duration_cast<std::chrono::milliseconds>(measureEnd - measureStart);
+	std::cout << "Write finished in: " << measureDuration.count() << "ms" << std::endl;
+}
+
 int main(int argc, char* argv[])
 {
 	//GenerateEquirectangularCheckerboard(1024, 512);
-	GenerateMipMap("textures/Wolfstein.jpg", "textures/eq-box/out-eq-box-", MipGenerationType::Box, ImageShape::Equirect);
+	//GenerateMipMap("textures/Wolfstein.jpg", "textures/eq-box/out-eq-box-", MipGenerationType::Box, ImageShape::Equirect);
+	//GenerateMipMap("textures/Wolfstein.jpg", "textures/box/out-box-", MipGenerationType::Box, ImageShape::Regular);
+	AssembleCubeMap("textures/out", 1920, 1920);
 	return 0;
 }
