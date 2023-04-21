@@ -1,12 +1,12 @@
 ﻿# Add source to this project's executable.
 file(GLOB XR_DEMO_HEADERS "xr_demo/*.h")
 file(GLOB XR_DEMO_SOURCE "xr_demo/*.cpp")
-file(GLOB DESKTOP_HEADERS "desktop/*.h")
-file(GLOB DESKTOP_SOURCE "desktop/*.cpp")
+file(GLOB EXTENSION_HEADERS "extensions/*.h")
+file(GLOB EXTENSION_SOURCE "extensions/*.cpp")
 file(GLOB IMPORT_HEADERS "import/*.h import/*.hpp")
 file(GLOB IMPORT_SOURCE "import/*.cpp")
 file(GLOB DX_TEX_FILES "libraries/directx-tex/*.h" "libraries/directx-tex/*.cpp")
-add_executable (OpenXRViewer ${XR_DEMO_HEADERS} ${XR_DEMO_SOURCE} ${DESKTOP_HEADERS} ${DESKTOP_SOURCE} ${IMPORT_HEADERS} ${IMPORT_SOURCE} ${DX_TEX_FILES} "OpenXRViewer.cpp" "OpenXRViewer.h")
+add_executable (OpenXRViewer ${XR_DEMO_HEADERS} ${XR_DEMO_SOURCE} ${EXTENSION_HEADERS} ${EXTENSION_SOURCE} ${IMPORT_HEADERS} ${IMPORT_SOURCE} ${DX_TEX_FILES} "OpenXRViewer.cpp" "OpenXRViewer.h")
 
 # turning this off will show the default openxr demo instead (only useful for testing purposes)
 add_definitions(-DUSE_CUSTOM_GRAPHICS_PLUGIN)

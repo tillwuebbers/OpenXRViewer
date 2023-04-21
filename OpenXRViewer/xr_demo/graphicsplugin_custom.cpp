@@ -9,7 +9,8 @@
 #include "graphicsplugin.h"
 #include "options.h"
 
-#include "../desktop/desktop.h"
+#include "../extensions/desktop.h"
+#include "../extensions/models.h"
 
 #if defined(USE_CUSTOM_GRAPHICS_PLUGIN) && defined(XR_USE_GRAPHICS_API_D3D12) && !defined(MISSING_DIRECTX_COLORS)
 
@@ -23,90 +24,10 @@
 #undef min
 #undef max
 
-#define TINYGLTF_IMPLEMENTATION
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#define TINYGLTF_USE_CPP14
-#include "../import/tiny_gltf.h"
-using namespace tinygltf;
-
 using namespace Microsoft::WRL;
 using namespace DirectX;
 
 namespace {
-    struct SphereVertex
-    {
-        XrVector3f position;
-        XrVector3f color;
-        XrVector2f texCoord;
-        //XrVector3f normal;
-    };
-
-    struct SphereMesh
-    {
-		std::vector<SphereVertex> vertices;
-		std::vector<uint16_t> indices;
-    };
-
-    template <typename T>
-    const T* ReadBuffer(Model& model, Accessor& accessor)
-    {
-        BufferView& bufferView = model.bufferViews[accessor.bufferView];
-        Buffer& buffer = model.buffers[bufferView.buffer];
-        return reinterpret_cast<T*>(&buffer.data[bufferView.byteOffset + accessor.byteOffset]);
-    }
-
-    void LoadSphere(SphereMesh& mesh)
-    {
-        Model model;
-        TinyGLTF loader;
-        std::string err;
-        std::string warn;
-
-        bool ret = loader.LoadBinaryFromFile(&model, &err, &warn, "models/sphere.glb");
-
-        if (!warn.empty())
-        {
-            OutputDebugStringA(std::format("Warn: {}\n", warn).c_str());
-        }
-
-        if (!err.empty())
-        {
-            OutputDebugStringA(std::format("Err: {}\n", err).c_str());
-        }
-
-        if (!ret)
-        {
-            OutputDebugStringA(std::format("Failed to parse glTF\n").c_str());
-        }
-
-        Primitive& prim = model.meshes[0].primitives[0];
-		Accessor& indices = model.accessors[prim.indices];
-		Accessor& positions = model.accessors[prim.attributes["POSITION"]];
-		Accessor& normals = model.accessors[prim.attributes["NORMAL"]];
-		Accessor& texCoords = model.accessors[prim.attributes["TEXCOORD_0"]];
-
-        assert(indices.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT);
-        assert(indices.type == TINYGLTF_TYPE_SCALAR);
-
-        mesh.indices.resize(indices.count);
-        const uint16_t* indexData = ReadBuffer<uint16_t>(model, indices);
-		for (size_t i = 0; i < indices.count; i++)
-		{
-			mesh.indices[i] = indexData[i];
-		}
-
-        mesh.vertices.resize(positions.count);
-		for (size_t i = 0; i < positions.count; i++)
-		{
-			SphereVertex& vertex = mesh.vertices[i];
-			vertex.position = ReadBuffer<XrVector3f>(model, positions)[i];
-            vertex.color = XrVector3f{1., 1., 1.};
-			vertex.texCoord = ReadBuffer<XrVector2f>(model, texCoords)[i];
-            //vertex.normal = ReadBuffer<XrVector3f>(model, normals)[i];
-		}
-    }
-
     void InitializeD3D12DeviceForAdapter(IDXGIAdapter1* adapter, D3D_FEATURE_LEVEL minimumFeatureLevel, ID3D12Device** device) {
 #if !defined(NDEBUG)
         ComPtr<ID3D12Debug> debugCtrl;
@@ -274,60 +195,6 @@ namespace {
         uint64_t m_fenceValue = 0;
     };
 
-    bool LoadShadersFromFile(const wchar_t* shaderFileName, ComPtr<ID3DBlob>& vertexBytes, ComPtr<ID3DBlob>& pixelBytes, std::string& shaderError)
-    {
-        OutputDebugString(L"Loading shaders...\n");
-
-        UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-        std::wstring path = std::wstring(L"../../../../OpenXRViewer/shaders/");
-        path.append(shaderFileName);
-        const wchar_t* shaderPath = path.c_str();
-        Sleep(100);
-
-        time_t startTime = time(nullptr);
-        bool canOpen = false;
-        while (!canOpen)
-        {
-            std::ifstream fileStream(shaderPath, std::ios::in);
-
-            canOpen = fileStream.good();
-            fileStream.close();
-
-            if (!canOpen)
-            {
-                time_t elapsedSeconds = time(nullptr) - startTime;
-                if (elapsedSeconds > 5)
-                {
-                    throw std::format(L"Could not open shader file {}", shaderPath).c_str();
-                }
-                Sleep(100);
-            }
-        }
-
-        ComPtr<ID3DBlob> vsErrors;
-        ComPtr<ID3D10Blob> psErrors;
-
-        shaderError.clear();
-        HRESULT hr = D3DCompileFromFile(shaderPath, nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "MainVS", "vs_5_1", compileFlags, 0, &vertexBytes, &vsErrors);
-
-        if (vsErrors)
-        {
-            shaderError = std::format("Vertex Shader Errors:\n{}\n", (LPCSTR)vsErrors->GetBufferPointer());
-            OutputDebugString(std::format(L"{}\n", shaderPath).c_str());
-            OutputDebugStringA(shaderError.c_str());
-        }
-        if (FAILED(hr)) return false;
-
-        hr = D3DCompileFromFile(shaderPath, nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "MainPS", "ps_5_1", compileFlags, 0, &pixelBytes, &psErrors);
-        if (psErrors)
-        {
-            shaderError = std::format("Pixel Shader Errors:\n{}\n", (LPCSTR)psErrors->GetBufferPointer());
-            OutputDebugString(std::format(L"{}\n", shaderPath).c_str());
-            OutputDebugStringA(shaderError.c_str());
-        }
-        if (FAILED(hr)) return false;
-    }
-
     struct D3D12GraphicsPlugin : public IGraphicsPlugin {
         D3D12GraphicsPlugin(const std::shared_ptr<Options>& options, std::shared_ptr<IPlatformPlugin>)
             : m_clearColor(options->GetBackgroundClearColor())
@@ -490,73 +357,119 @@ namespace {
                 cmdList->CopyBufferRegion(m_cubeIndexBuffer.Get(), 0, cubeIndexBufferUpload.Get(), 0, sizeof(Geometry::c_cubeIndices));
             }
 
-            // Load and upload sphere
-            SphereMesh sphere{};
-            LoadSphere(sphere);
-            m_sphereVertexCount = sphere.vertices.size();
-            m_sphereIndexCount = sphere.indices.size();
+            // Load and upload environment model
+            EnvironmentMesh envModel{};
+#define CUBE_TEST
+#ifdef SPHERE_TEST
+            LoadGltf("models/sphere.glb", envModel);
+#endif
+#ifdef CUBE_TEST
+            LoadGltf("models/cube.glb", envModel);
+#endif
+            m_envModelVertexCount = envModel.vertices.size();
+            m_envModelIndexCount = envModel.indices.size();
 
-            ComPtr<ID3D12Resource> sphereVertexBufferUpload;
-			size_t sphereVertexBufferSize = sphere.vertices.size() * sizeof(SphereVertex);
-            m_sphereVertexBuffer = CreateBuffer(m_device.Get(), sphereVertexBufferSize, D3D12_HEAP_TYPE_DEFAULT);
+            ComPtr<ID3D12Resource> envModelVertexBufferUpload;
+			size_t envModelVertexBufferSize = envModel.vertices.size() * sizeof(EnvironmentVertex);
+            m_envModelVertexBuffer = CreateBuffer(m_device.Get(), envModelVertexBufferSize, D3D12_HEAP_TYPE_DEFAULT);
             {
-                sphereVertexBufferUpload = CreateBuffer(m_device.Get(), sphereVertexBufferSize, D3D12_HEAP_TYPE_UPLOAD);
+                envModelVertexBufferUpload = CreateBuffer(m_device.Get(), envModelVertexBufferSize, D3D12_HEAP_TYPE_UPLOAD);
 
                 void* data;
                 const D3D12_RANGE readRange{ 0, 0 };
-                CHECK_HRCMD(sphereVertexBufferUpload->Map(0, &readRange, &data));
-                memcpy(data, sphere.vertices.data(), sphereVertexBufferSize);
-                sphereVertexBufferUpload->Unmap(0, nullptr);
+                CHECK_HRCMD(envModelVertexBufferUpload->Map(0, &readRange, &data));
+                memcpy(data, envModel.vertices.data(), envModelVertexBufferSize);
+                envModelVertexBufferUpload->Unmap(0, nullptr);
 
-                cmdList->CopyBufferRegion(m_sphereVertexBuffer.Get(), 0, sphereVertexBufferUpload.Get(), 0, sphereVertexBufferSize);
+                cmdList->CopyBufferRegion(m_envModelVertexBuffer.Get(), 0, envModelVertexBufferUpload.Get(), 0, envModelVertexBufferSize);
             }
 
-            ComPtr<ID3D12Resource> sphereIndexBufferUpload;
-			size_t sphereIndexBufferSize = sphere.indices.size() * sizeof(uint16_t);
-            m_sphereIndexBuffer = CreateBuffer(m_device.Get(), sphereIndexBufferSize, D3D12_HEAP_TYPE_DEFAULT);
+            ComPtr<ID3D12Resource> envModelIndexBufferUpload;
+			size_t envModelIndexBufferSize = envModel.indices.size() * sizeof(uint16_t);
+            m_envModelIndexBuffer = CreateBuffer(m_device.Get(), envModelIndexBufferSize, D3D12_HEAP_TYPE_DEFAULT);
             {
-                sphereIndexBufferUpload = CreateBuffer(m_device.Get(), sphereIndexBufferSize, D3D12_HEAP_TYPE_UPLOAD);
+                envModelIndexBufferUpload = CreateBuffer(m_device.Get(), envModelIndexBufferSize, D3D12_HEAP_TYPE_UPLOAD);
 
                 void* data;
                 const D3D12_RANGE readRange{ 0, 0 };
-                CHECK_HRCMD(sphereIndexBufferUpload->Map(0, &readRange, &data));
-                memcpy(data, sphere.indices.data(), sphereIndexBufferSize);
-                sphereIndexBufferUpload->Unmap(0, nullptr);
+                CHECK_HRCMD(envModelIndexBufferUpload->Map(0, &readRange, &data));
+                memcpy(data, envModel.indices.data(), envModelIndexBufferSize);
+                envModelIndexBufferUpload->Unmap(0, nullptr);
 
-                cmdList->CopyBufferRegion(m_sphereIndexBuffer.Get(), 0, sphereIndexBufferUpload.Get(), 0, sphereIndexBufferSize);
+                cmdList->CopyBufferRegion(m_envModelIndexBuffer.Get(), 0, envModelIndexBufferUpload.Get(), 0, envModelIndexBufferSize);
             }
 
             // Upload Texture
             ComPtr<ID3D12Resource> textureUpload;
 			{
-				/*std::vector<uint8_t> textureData;
+                UINT subresourceCount = 0;
+#ifdef CUBE_TEST
+				std::vector<uint8_t> textureData;
 				int textureWidth, textureHeight, textureChannels;
-				stbi_uc* pixels = stbi_load("textures/xyz.png", &textureWidth, &textureHeight, &textureChannels, STBI_rgb_alpha);
+				stbi_uc* pixels = stbi_load("textures/Wolfstein-cube.png", &textureWidth, &textureHeight, &textureChannels, STBI_rgb_alpha);
 				CHECK(pixels != nullptr);
 				textureData.resize(textureWidth * textureHeight * 4);
 				memcpy(textureData.data(), pixels, textureData.size());
-				stbi_image_free(pixels);*/
+				m_texture = CreateTexture(m_device.Get(), textureWidth, textureHeight, D3D12_HEAP_TYPE_DEFAULT);
 
+                {
+                    textureUpload = CreateBuffer(m_device.Get(), textureData.size(), D3D12_HEAP_TYPE_UPLOAD);
+
+                    void* data;
+                    const D3D12_RANGE readRange{ 0, 0 };
+                    CHECK_HRCMD(textureUpload->Map(0, &readRange, &data));
+                    memcpy(data, textureData.data(), textureData.size());
+                    textureUpload->Unmap(0, nullptr);
+
+                    // Copy texture
+                    D3D12_TEXTURE_COPY_LOCATION dst = {};
+                    dst.pResource = m_texture.Get();
+                    dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                    dst.SubresourceIndex = 0;
+
+                    D3D12_TEXTURE_COPY_LOCATION src = {};
+                    src.pResource = textureUpload.Get();
+                    src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                    src.PlacedFootprint.Offset = 0;
+                    D3D12_RESOURCE_DESC textureDesc = m_texture->GetDesc();
+
+                    src.PlacedFootprint.Footprint.Format = textureDesc.Format;
+                    src.PlacedFootprint.Footprint.Width = textureDesc.Width;
+                    src.PlacedFootprint.Footprint.Height = textureDesc.Height;
+                    src.PlacedFootprint.Footprint.Depth = 1;
+                    src.PlacedFootprint.Footprint.RowPitch = (textureDesc.Width * 4 + 255) & ~255;
+
+                    cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+                }
+                stbi_image_free(pixels);
+#endif
+#ifdef SPHERE_TEST
                 std::unique_ptr<uint8_t[]> data{};
                 std::vector<D3D12_SUBRESOURCE_DATA> subresources{};
                 HRESULT hr = LoadDDSTextureFromFile(m_device.Get(), L"textures/Wolfstein-test-1.dds", &m_texture, data, subresources);
                 assert(!FAILED(hr));
+                subresourceCount = subresources.size();
+                subresourcePtr = subresources.data();
 
-				//m_texture = CreateTexture(m_device.Get(), textureWidth, textureHeight, D3D12_HEAP_TYPE_DEFAULT);
 				{
-					textureUpload = CreateBuffer(m_device.Get(), GetRequiredIntermediateSize(m_texture.Get(), 0, subresources.size()), D3D12_HEAP_TYPE_UPLOAD);
+					textureUpload = CreateBuffer(m_device.Get(), GetRequiredIntermediateSize(m_texture.Get(), 0, subresourceCount), D3D12_HEAP_TYPE_UPLOAD);
 
-					UpdateSubresources(cmdList.Get(), m_texture.Get(), textureUpload.Get(), 0, 0, subresources.size(), subresources.data());
+					UpdateSubresources(cmdList.Get(), m_texture.Get(), textureUpload.Get(), 0, 0, subresourceCount, subresourcePtr);
 
                     CD3DX12_RESOURCE_BARRIER transition = CD3DX12_RESOURCE_BARRIER::Transition(m_texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                     cmdList->ResourceBarrier(1, &transition);
 				}
+#endif
 
                 D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
                 srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 				srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
                 srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-                srvDesc.Texture2D.MipLevels = subresources.size();
+#ifdef SPHERE_TEST
+                srvDesc.Texture2D.MipLevels = subresourceCount;
+#else
+                srvDesc.Texture2D.MipLevels = 1;
+#endif
                 m_device->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
 			}
 
@@ -855,18 +768,18 @@ namespace {
                 offset += cubeCBufferSize;
             }
 
-			// Set sphere primitive data.
+			// Set envModel primitive data.
             {
-                const D3D12_VERTEX_BUFFER_VIEW vertexBufferView[] = { {m_sphereVertexBuffer->GetGPUVirtualAddress(), m_sphereVertexCount * sizeof(Geometry::Vertex), sizeof(Geometry::Vertex)}};
+                const D3D12_VERTEX_BUFFER_VIEW vertexBufferView[] = { {m_envModelVertexBuffer->GetGPUVirtualAddress(), m_envModelVertexCount * sizeof(Geometry::Vertex), sizeof(Geometry::Vertex)}};
                 cmdList->IASetVertexBuffers(0, (UINT)ArraySize(vertexBufferView), vertexBufferView);
 
-                D3D12_INDEX_BUFFER_VIEW indexBufferView{ m_sphereIndexBuffer->GetGPUVirtualAddress(), m_sphereIndexCount * sizeof(uint16_t), DXGI_FORMAT_R16_UINT};
+                D3D12_INDEX_BUFFER_VIEW indexBufferView{ m_envModelIndexBuffer->GetGPUVirtualAddress(), m_envModelIndexCount * sizeof(uint16_t), DXGI_FORMAT_R16_UINT};
                 cmdList->IASetIndexBuffer(&indexBufferView);
 
                 cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             }
 
-            // Render sphere
+            // Render envModel
             {
                 // Compute and update the model transform.
                 ModelConstantBuffer model;
@@ -881,7 +794,7 @@ namespace {
                 }
 
                 cmdList->SetGraphicsRootConstantBufferView(0, modelCBuffer->GetGPUVirtualAddress() + offset);
-                cmdList->DrawIndexedInstanced(m_sphereIndexCount, 1, 0, 0, 0);
+                cmdList->DrawIndexedInstanced(m_envModelIndexCount, 1, 0, 0, 0);
 
                 offset += cubeCBufferSize;
             }
@@ -942,11 +855,11 @@ namespace {
         std::map<DXGI_FORMAT, ComPtr<ID3D12PipelineState>> m_pipelineStates;
         ComPtr<ID3D12Resource> m_cubeVertexBuffer;
         ComPtr<ID3D12Resource> m_cubeIndexBuffer;
-        ComPtr<ID3D12Resource> m_sphereVertexBuffer;
-        ComPtr<ID3D12Resource> m_sphereIndexBuffer;
+        ComPtr<ID3D12Resource> m_envModelVertexBuffer;
+        ComPtr<ID3D12Resource> m_envModelIndexBuffer;
         ComPtr<ID3D12Resource> m_texture;
-        UINT m_sphereVertexCount;
-        UINT m_sphereIndexCount;
+        UINT m_envModelVertexCount;
+        UINT m_envModelIndexCount;
         ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
         ComPtr<ID3D12DescriptorHeap> m_dsvHeap;
         ComPtr<ID3D12DescriptorHeap> m_cbvSrvHeap;
