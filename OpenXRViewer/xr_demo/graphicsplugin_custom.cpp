@@ -289,9 +289,9 @@ namespace {
 
             D3D12_STATIC_SAMPLER_DESC texSampler = {};
             texSampler.Filter = D3D12_FILTER_ANISOTROPIC;
-            texSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
-            texSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
-            texSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+            texSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+            texSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+            texSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
             texSampler.MipLODBias = 0;
             texSampler.MaxAnisotropy = 16;
             texSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
@@ -359,7 +359,7 @@ namespace {
 
             // Load and upload environment model
             EnvironmentMesh envModel{};
-#define CUBE_TEST
+#define SPHERE_TEST
 #ifdef SPHERE_TEST
             LoadGltf("models/sphere.glb", envModel);
 #endif
@@ -401,16 +401,21 @@ namespace {
 
             // Upload Texture
             ComPtr<ID3D12Resource> textureUpload;
-			{
-                UINT subresourceCount = 0;
-#ifdef CUBE_TEST
-				std::vector<uint8_t> textureData;
-				int textureWidth, textureHeight, textureChannels;
-				stbi_uc* pixels = stbi_load("textures/Wolfstein-cube.png", &textureWidth, &textureHeight, &textureChannels, STBI_rgb_alpha);
-				CHECK(pixels != nullptr);
-				textureData.resize(textureWidth * textureHeight * 4);
-				memcpy(textureData.data(), pixels, textureData.size());
-				m_texture = CreateTexture(m_device.Get(), textureWidth, textureHeight, D3D12_HEAP_TYPE_DEFAULT);
+
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MipLevels = 1;
+
+            auto loadFromStb = [&](const char* path) {
+                std::vector<uint8_t> textureData;
+                int textureWidth, textureHeight, textureChannels;
+                stbi_uc* pixels = stbi_load(path, &textureWidth, &textureHeight, &textureChannels, STBI_rgb_alpha);
+                CHECK(pixels != nullptr);
+                textureData.resize(textureWidth* textureHeight * 4);
+                memcpy(textureData.data(), pixels, textureData.size());
+                m_texture = CreateTexture(m_device.Get(), textureWidth, textureHeight, D3D12_HEAP_TYPE_DEFAULT);
 
                 {
                     textureUpload = CreateBuffer(m_device.Get(), textureData.size(), D3D12_HEAP_TYPE_UPLOAD);
@@ -442,33 +447,34 @@ namespace {
                     cmdList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
                 }
                 stbi_image_free(pixels);
-#endif
-#ifdef SPHERE_TEST
+            };
+
+            auto loadFromDds = [&](const wchar_t* path) {
                 std::unique_ptr<uint8_t[]> data{};
                 std::vector<D3D12_SUBRESOURCE_DATA> subresources{};
-                HRESULT hr = LoadDDSTextureFromFile(m_device.Get(), L"textures/Wolfstein-test-1.dds", &m_texture, data, subresources);
+                HRESULT hr = LoadDDSTextureFromFile(m_device.Get(), path, &m_texture, data, subresources);
                 assert(!FAILED(hr));
-                subresourceCount = subresources.size();
-                subresourcePtr = subresources.data();
+                UINT subresourceCount = subresources.size();
 
-				{
-					textureUpload = CreateBuffer(m_device.Get(), GetRequiredIntermediateSize(m_texture.Get(), 0, subresourceCount), D3D12_HEAP_TYPE_UPLOAD);
+                {
+                    textureUpload = CreateBuffer(m_device.Get(), GetRequiredIntermediateSize(m_texture.Get(), 0, subresourceCount), D3D12_HEAP_TYPE_UPLOAD);
 
-					UpdateSubresources(cmdList.Get(), m_texture.Get(), textureUpload.Get(), 0, 0, subresourceCount, subresourcePtr);
+                    UpdateSubresources(cmdList.Get(), m_texture.Get(), textureUpload.Get(), 0, 0, subresourceCount, subresources.data());
 
                     CD3DX12_RESOURCE_BARRIER transition = CD3DX12_RESOURCE_BARRIER::Transition(m_texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                     cmdList->ResourceBarrier(1, &transition);
-				}
-#endif
+                }
 
-                D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-                srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-				srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-                srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-#ifdef SPHERE_TEST
                 srvDesc.Texture2D.MipLevels = subresourceCount;
-#else
-                srvDesc.Texture2D.MipLevels = 1;
+            };
+
+			{
+#ifdef CUBE_TEST
+                loadFromStb("textures/Wolfstein-cube.png");
+#endif
+#ifdef SPHERE_TEST
+                loadFromStb("textures/Wolfstein.jpg");
+                //loadFromDds(L"textures/Wolfstein-test-1.dds");
 #endif
                 m_device->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
 			}
@@ -619,8 +625,13 @@ namespace {
             CpuWaitForFence(swapchainContext.GetFrameFenceValue());
             if (m_desktopView.wantWriteImage)
             {
-                m_desktopView.WriteFile();
-                m_desktopView.wantWriteImage = false;
+                #ifdef SPHERE_TEST
+                const char* fileName = "test_sphere.png";
+                #endif
+                #ifdef CUBE_TEST
+                const char* fileName = "test_cubemap.png";
+                #endif
+                if (m_desktopView.WriteFile(fileName)) m_desktopView.wantWriteImage = false;
             }
             swapchainContext.ResetCommandAllocator();
 
@@ -709,9 +720,14 @@ namespace {
             D3D12_CPU_DESCRIPTOR_HANDLE renderTargets[] = { renderTargetView };
             cmdList->OMSetRenderTargets((UINT)ArraySize(renderTargets), renderTargets, true, &depthStencilView);
 
-            const XMMATRIX spaceToView = XMMatrixInverse(nullptr, LoadXrPose(layerView.pose));
+            XMMATRIX spaceToView = XMMatrixInverse(nullptr, LoadXrPose(layerView.pose));
             XrMatrix4x4f projectionMatrix;
             XrMatrix4x4f_CreateProjectionFov(&projectionMatrix, GRAPHICS_D3D, layerView.fov, 0.05f, 100.0f);
+
+            if (m_desktopView.wantWriteImage)
+            {
+                spaceToView = XMMatrixRotationAxis({ 1.f, 0.f, 0.f }, XM_PIDIV2);
+            }
 
             // Set shaders and constant buffers.
             ID3D12Resource* viewProjectionCBuffer = swapchainContext.GetViewProjectionCBuffer();
@@ -763,7 +779,7 @@ namespace {
                 cmdList->SetGraphicsRootConstantBufferView(0, modelCBuffer->GetGPUVirtualAddress() + offset);
 
                 // Draw the cube.
-                cmdList->DrawIndexedInstanced((UINT)ArraySize(Geometry::c_cubeIndices), 1, 0, 0, 0);
+                //cmdList->DrawIndexedInstanced((UINT)ArraySize(Geometry::c_cubeIndices), 1, 0, 0, 0);
 
                 offset += cubeCBufferSize;
             }
@@ -779,7 +795,7 @@ namespace {
                 cmdList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             }
 
-            // Render envModel
+            // Render environment
             {
                 // Compute and update the model transform.
                 ModelConstantBuffer model;
@@ -808,6 +824,7 @@ namespace {
             if (m_desktopView.wantWriteImage)
             {
                 m_desktopView.CopyRenderResultToPreview(cmdList.Get(), colorTexture, 0);
+                m_desktopView.CreatePerfectFilteredImage(spaceToView, *reinterpret_cast<XMMATRIX*>(&projectionMatrix), colorTextureDesc.Width, colorTextureDesc.Height);
             }
 
             CHECK_HRCMD(cmdList->Close());
