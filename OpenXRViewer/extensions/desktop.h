@@ -7,6 +7,9 @@
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
 
+#undef min
+#undef max
+
 #include "../../EquirectConverter/libraries/stb/stb_image.h"
 #include "../../EquirectConverter/libraries/stb/stb_image_write.h"
 

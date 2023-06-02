@@ -359,7 +359,7 @@ namespace {
 
             // Load and upload environment model
             EnvironmentMesh envModel{};
-#define SPHERE_TEST
+#define CUBE_TEST
 #ifdef SPHERE_TEST
             LoadGltf("models/sphere.glb", envModel);
 #endif
