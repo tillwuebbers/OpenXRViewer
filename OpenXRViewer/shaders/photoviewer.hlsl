@@ -15,7 +15,9 @@ cbuffer ViewProjectionConstantBuffer : register(b1) {
     float4x4 ViewProjection;
 };
 Texture2D tex : register(t2);
+TextureCube cubemap : register(t3);
 SamplerState texSampler : register(s0);
+SamplerState cubemapSampler : register(s1);
 
 PSVertex MainVS(Vertex input) {
     PSVertex output;
@@ -26,10 +28,16 @@ PSVertex MainVS(Vertex input) {
 }
 
 float4 MainPS(PSVertex input) : SV_TARGET{
+    // Checkerboard Test
     float checkerboardCount = 8.;
     float checkerboardOffset = 1. / 16.;
     float checkerboard = (round((input.UV.x + checkerboardOffset) * checkerboardCount) + round((input.UV.y + checkerboardOffset) * checkerboardCount)) % 2 == 0 ? 0.f : 1.f;
     //return float4(checkerboard, checkerboard, checkerboard, 1);
     //return tex.SampleBias(texSampler, input.UV, 2);
+
+    // Cubemap sample
+    return cubemap.Sample(cubemapSampler, input.UV);
+
+    // Regular texture sample
     return tex.Sample(texSampler, input.UV);
 }

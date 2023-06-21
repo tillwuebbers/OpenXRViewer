@@ -259,7 +259,7 @@ namespace {
             }
             {
                 D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-                heapDesc.NumDescriptors = 1;
+                heapDesc.NumDescriptors = 2;
                 heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
                 heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
                 CHECK_HRCMD(m_device->CreateDescriptorHeap(&heapDesc, __uuidof(ID3D12DescriptorHeap),
@@ -268,7 +268,7 @@ namespace {
 
             std::vector<D3D12_DESCRIPTOR_RANGE> ranges{ 1 };
 			ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-			ranges[0].NumDescriptors = 1;
+			ranges[0].NumDescriptors = 2;
 			ranges[0].BaseShaderRegister = 2;
 			ranges[0].RegisterSpace = 0;
 			ranges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -302,7 +302,22 @@ namespace {
             texSampler.RegisterSpace = 0;
             texSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-            std::vector<D3D12_STATIC_SAMPLER_DESC> samplers = { texSampler };
+            D3D12_STATIC_SAMPLER_DESC cubemapSampler = {};
+            cubemapSampler.Filter = D3D12_FILTER_ANISOTROPIC;
+            cubemapSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            cubemapSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            cubemapSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+            cubemapSampler.MipLODBias = 0;
+            cubemapSampler.MaxAnisotropy = 16;
+            cubemapSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+            cubemapSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+            cubemapSampler.MinLOD = 0.0f;
+            cubemapSampler.MaxLOD = D3D12_FLOAT32_MAX;
+            cubemapSampler.ShaderRegister = 0;
+            cubemapSampler.RegisterSpace = 0;
+            cubemapSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+            std::vector<D3D12_STATIC_SAMPLER_DESC> samplers = { texSampler, cubemapSampler };
 
             D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc{};
             rootSignatureDesc.NumParameters = (UINT)ArraySize(rootParams);
@@ -408,6 +423,12 @@ namespace {
             srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             srvDesc.Texture2D.MipLevels = 1;
 
+            D3D12_SHADER_RESOURCE_VIEW_DESC cubemapSrvDesc = {};
+            cubemapSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            cubemapSrvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            cubemapSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+            cubemapSrvDesc.TextureCube.MipLevels = 1;
+
             auto loadFromStb = [&](const char* path) {
                 std::vector<uint8_t> textureData;
                 int textureWidth, textureHeight, textureChannels;
@@ -466,6 +487,7 @@ namespace {
                 }
 
                 srvDesc.Texture2D.MipLevels = subresourceCount;
+                cubemapSrvDesc.TextureCube.MipLevels = subresourceCount;
             };
 
 			{
@@ -476,7 +498,12 @@ namespace {
                 loadFromStb("textures/Wolfstein.jpg");
                 //loadFromDds(L"textures/Wolfstein-test-1.dds");
 #endif
-                m_device->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart());
+                auto descriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+                CD3DX12_CPU_DESCRIPTOR_HANDLE textureSrvHandle(m_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart(), 0, descriptorSize);
+                CD3DX12_CPU_DESCRIPTOR_HANDLE cubemapSrvHandle(m_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart(), 1, descriptorSize);
+
+                m_device->CreateShaderResourceView(m_texture.Get(), &srvDesc, textureSrvHandle);
+                m_device->CreateShaderResourceView(m_texture.Get(), &cubemapSrvDesc, cubemapSrvHandle);
 			}
 
             CHECK_HRCMD(cmdList->Close());
@@ -743,8 +770,12 @@ namespace {
 
             cmdList->SetGraphicsRootConstantBufferView(1, viewProjectionCBuffer->GetGPUVirtualAddress());
 
-            // Bind texture
-			cmdList->SetGraphicsRootDescriptorTable(2, m_cbvSrvHeap->GetGPUDescriptorHandleForHeapStart());
+            // Bind textures
+            auto descriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            CD3DX12_GPU_DESCRIPTOR_HANDLE textureSrvHandle(m_cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), 0, descriptorSize);
+            CD3DX12_GPU_DESCRIPTOR_HANDLE cubemapSrvHandle(m_cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), 1, descriptorSize);
+            cmdList->SetGraphicsRootDescriptorTable(2, textureSrvHandle);
+            cmdList->SetGraphicsRootDescriptorTable(3, cubemapSrvHandle);
 
             // Set cube primitive data.
             {
