@@ -13,6 +13,7 @@ struct ModelConstantBuffer {
 };
 struct ViewProjectionConstantBuffer {
     DirectX::XMFLOAT4X4 ViewProjection;
+    DirectX::XMFLOAT3 CameraPos;
 };
 
 // Separate entrypoints for the vertex and pixel shader functions.

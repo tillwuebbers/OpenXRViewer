@@ -281,10 +281,10 @@ namespace {
             rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
             rootParams[1].Descriptor.ShaderRegister = 1;
             rootParams[1].Descriptor.RegisterSpace = 0;
-            rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+            rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
             rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
 			rootParams[2].DescriptorTable.pDescriptorRanges = ranges.data();
-			rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+            rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 			rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
 
             D3D12_STATIC_SAMPLER_DESC texSampler = {};
@@ -313,7 +313,7 @@ namespace {
             cubemapSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
             cubemapSampler.MinLOD = 0.0f;
             cubemapSampler.MaxLOD = D3D12_FLOAT32_MAX;
-            cubemapSampler.ShaderRegister = 0;
+            cubemapSampler.ShaderRegister = 1;
             cubemapSampler.RegisterSpace = 0;
             cubemapSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
@@ -328,8 +328,15 @@ namespace {
 
             ComPtr<ID3DBlob> rootSignatureBlob;
             ComPtr<ID3DBlob> error;
-            CHECK_HRCMD(D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1_0,
-                rootSignatureBlob.ReleaseAndGetAddressOf(), error.ReleaseAndGetAddressOf()));
+            HRESULT hr = D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1_0,
+                rootSignatureBlob.ReleaseAndGetAddressOf(), error.ReleaseAndGetAddressOf());
+
+            if (error)
+            {
+                OutputDebugStringA("Root Signature Error:\n");
+                OutputDebugStringA((char*)error->GetBufferPointer());
+            }
+            CHECK_HRCMD(hr);
 
             CHECK_HRCMD(m_device->CreateRootSignature(0, rootSignatureBlob->GetBufferPointer(), rootSignatureBlob->GetBufferSize(),
                 __uuidof(ID3D12RootSignature),
@@ -447,7 +454,6 @@ namespace {
                     memcpy(data, textureData.data(), textureData.size());
                     textureUpload->Unmap(0, nullptr);
 
-                    // Copy texture
                     D3D12_TEXTURE_COPY_LOCATION dst = {};
                     dst.pResource = m_texture.Get();
                     dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
@@ -635,8 +641,13 @@ namespace {
             pipelineStateDesc.Flags = D3D12_PIPELINE_STATE_FLAG_NONE;
 
             ComPtr<ID3D12PipelineState> pipelineState;
-            CHECK_HRCMD(m_device->CreateGraphicsPipelineState(&pipelineStateDesc, __uuidof(ID3D12PipelineState),
-                reinterpret_cast<void**>(pipelineState.ReleaseAndGetAddressOf())));
+            HRESULT hr = m_device->CreateGraphicsPipelineState(&pipelineStateDesc, __uuidof(ID3D12PipelineState),
+                				reinterpret_cast<void**>(pipelineState.ReleaseAndGetAddressOf()));
+            if (FAILED(hr)) {
+                // Print error
+
+			}
+            CHECK_HRCMD(hr);
             ID3D12PipelineState* pipelineStateRaw = pipelineState.Get();
 
             m_pipelineStates.emplace(swapchainFormat, std::move(pipelineState));
@@ -760,6 +771,8 @@ namespace {
             ID3D12Resource* viewProjectionCBuffer = swapchainContext.GetViewProjectionCBuffer();
             ViewProjectionConstantBuffer viewProjection;
             XMStoreFloat4x4(&viewProjection.ViewProjection, XMMatrixTranspose(spaceToView * LoadXrMatrix(projectionMatrix)));
+            viewProjection.CameraPos = { spaceToView.r[3].m128_f32[0], spaceToView.r[3].m128_f32[1], spaceToView.r[3].m128_f32[2] };
+
             {
                 void* data;
                 const D3D12_RANGE readRange{ 0, 0 };
@@ -775,7 +788,7 @@ namespace {
             CD3DX12_GPU_DESCRIPTOR_HANDLE textureSrvHandle(m_cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), 0, descriptorSize);
             CD3DX12_GPU_DESCRIPTOR_HANDLE cubemapSrvHandle(m_cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), 1, descriptorSize);
             cmdList->SetGraphicsRootDescriptorTable(2, textureSrvHandle);
-            cmdList->SetGraphicsRootDescriptorTable(3, cubemapSrvHandle);
+            cmdList->SetGraphicsRootDescriptorTable(2, cubemapSrvHandle);
 
             // Set cube primitive data.
             {
@@ -856,6 +869,7 @@ namespace {
             {
                 m_desktopView.CopyRenderResultToPreview(cmdList.Get(), colorTexture, 0);
                 m_desktopView.CreatePerfectFilteredImage(spaceToView, *reinterpret_cast<XMMATRIX*>(&projectionMatrix), colorTextureDesc.Width, colorTextureDesc.Height);
+                m_desktopView.wantWriteImage = false;
             }
 
             CHECK_HRCMD(cmdList->Close());
