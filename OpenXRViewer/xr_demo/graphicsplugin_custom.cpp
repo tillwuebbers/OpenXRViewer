@@ -381,7 +381,7 @@ namespace {
 
             // Load and upload environment model
             EnvironmentMesh envModel{};
-#define CUBE_TEST
+#define SPHERE_TEST
 #ifdef SPHERE_TEST
             LoadGltf("models/sphere.glb", envModel);
 #endif
@@ -788,7 +788,7 @@ namespace {
             CD3DX12_GPU_DESCRIPTOR_HANDLE textureSrvHandle(m_cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), 0, descriptorSize);
             CD3DX12_GPU_DESCRIPTOR_HANDLE cubemapSrvHandle(m_cbvSrvHeap->GetGPUDescriptorHandleForHeapStart(), 1, descriptorSize);
             cmdList->SetGraphicsRootDescriptorTable(2, textureSrvHandle);
-            cmdList->SetGraphicsRootDescriptorTable(2, cubemapSrvHandle);
+            //cmdList->SetGraphicsRootDescriptorTable(2, cubemapSrvHandle);
 
             // Set cube primitive data.
             {
@@ -868,8 +868,10 @@ namespace {
             if (m_desktopView.wantWriteImage)
             {
                 m_desktopView.CopyRenderResultToPreview(cmdList.Get(), colorTexture, 0);
+#if RENDER_PERFECT
                 m_desktopView.CreatePerfectFilteredImage(spaceToView, *reinterpret_cast<XMMATRIX*>(&projectionMatrix), colorTextureDesc.Width, colorTextureDesc.Height);
                 m_desktopView.wantWriteImage = false;
+#endif
             }
 
             CHECK_HRCMD(cmdList->Close());
