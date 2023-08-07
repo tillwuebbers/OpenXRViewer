@@ -17,7 +17,7 @@ cbuffer ViewProjectionConstantBuffer : register(b1) {
     float3 CameraPos;
 };
 Texture2D tex : register(t2);
-TextureCube cubemap : register(t3);
+//TextureCube tex : register(t2);
 SamplerState texSampler : register(s0);
 SamplerState cubemapSampler : register(s1);
 
@@ -53,24 +53,30 @@ float4 MainPS(PSVertex input) : SV_TARGET
     //return tex.SampleBias(texSampler, input.UV, 2);
 
     // Cubemap sample
+    //float4x4 _90degRotation = { 0, 0, 1, 0,
+    //                          0, 1, 0, 0,
+    //                         -1, 0, 0, 0,
+    //                          0, 0, 0, 1 };
     //float3 dir = normalize(input.WorldPos - CameraPos);
-    //return cubemap.Sample(cubemapSampler, dir);
+    //dir = mul(float4(dir, 1), _90degRotation);
+    //return tex.Sample(texSampler, dir);
 
     // Regular texture sample
-    //return tex.Sample(texSampler, input.UV);
+    return tex.Sample(texSampler, input.UV);
     
     // Adjusted texture sample
-    
-    // xDerivative is a vector in texture space that describes the rate of change of texture pixels to screen pixels
     float2 xDerivative = ddx(input.UV);
     float2 yDerivative = ddy(input.UV);
     
-    // our texture space is actually "stretched" on the texture space x-axis, so we will have to edit both values.
-    float distanceFromCenter = abs(input.UV.y - 0.5) * 2.;
-    float hPixels = CalcHorizontalPixelSize(input.UV);
-    xDerivative.x = 100;
-    xDerivative.y = 100;
-    yDerivative.x = 100;
-    yDerivative.y = 100;
+    // xDerivative describes the direction and scale of the screen pixel on the input UV
+    // as a vector of the screen x direction mapped to the UV coordinates
+    // our texture space is actually "stretched" on the texture space x-axis
+    
+    float latitude = input.UV.y * PI - PI / 2;
+    float circumference = cos(latitude);
+    float circumferenceRatioToNoDistortion = 1.f / circumference;
+    xDerivative.x *= circumferenceRatioToNoDistortion;
+    yDerivative.x *= circumferenceRatioToNoDistortion;
+    
     return tex.SampleGrad(texSampler, input.UV, xDerivative, yDerivative);
 }

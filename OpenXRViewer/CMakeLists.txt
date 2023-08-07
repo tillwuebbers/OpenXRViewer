@@ -76,6 +76,9 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug")
   set(CMAKE_EXE_LINKER_FLAGS "/SAFESEH:NO")
 endif()
 
+# enable openmp
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /openmp")
+
 # build options
 set_property(TARGET OpenXRViewer PROPERTY CXX_STANDARD 20)
 target_compile_definitions(${PROJECT_NAME} PRIVATE "UNICODE;_UNICODE")

@@ -24,6 +24,10 @@
 #undef min
 #undef max
 
+//#define CUBE_TEST
+#define SPHERE_TEST
+#define RENDER_PERFECT
+
 using namespace Microsoft::WRL;
 using namespace DirectX;
 
@@ -93,8 +97,8 @@ namespace {
         buffDesc.Alignment = 0;
         buffDesc.Width = w;
         buffDesc.Height = h;
-        buffDesc.DepthOrArraySize = 1;
-        buffDesc.MipLevels = 0;
+        buffDesc.DepthOrArraySize = 6;
+        buffDesc.MipLevels = 1;
         buffDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
         buffDesc.SampleDesc.Count = 1;
         buffDesc.SampleDesc.Quality = 0;
@@ -259,7 +263,7 @@ namespace {
             }
             {
                 D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-                heapDesc.NumDescriptors = 2;
+                heapDesc.NumDescriptors = 1;
                 heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
                 heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
                 CHECK_HRCMD(m_device->CreateDescriptorHeap(&heapDesc, __uuidof(ID3D12DescriptorHeap),
@@ -268,7 +272,7 @@ namespace {
 
             std::vector<D3D12_DESCRIPTOR_RANGE> ranges{ 1 };
 			ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-			ranges[0].NumDescriptors = 2;
+			ranges[0].NumDescriptors = 1;
 			ranges[0].BaseShaderRegister = 2;
 			ranges[0].RegisterSpace = 0;
 			ranges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -310,7 +314,7 @@ namespace {
             cubemapSampler.MipLODBias = 0;
             cubemapSampler.MaxAnisotropy = 16;
             cubemapSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-            cubemapSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+            cubemapSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
             cubemapSampler.MinLOD = 0.0f;
             cubemapSampler.MaxLOD = D3D12_FLOAT32_MAX;
             cubemapSampler.ShaderRegister = 1;
@@ -381,9 +385,8 @@ namespace {
 
             // Load and upload environment model
             EnvironmentMesh envModel{};
-#define SPHERE_TEST
 #ifdef SPHERE_TEST
-            LoadGltf("models/sphere.glb", envModel);
+            LoadGltf("models/sphere_subdiv2.glb", envModel);
 #endif
 #ifdef CUBE_TEST
             LoadGltf("models/cube.glb", envModel);
@@ -422,45 +425,46 @@ namespace {
             }
 
             // Upload Texture
-            ComPtr<ID3D12Resource> textureUpload;
+            ComPtr<ID3D12Resource> textureUpload[6];
 
             D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
             srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+#ifdef CUBE_TEST
+            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+#else
             srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+#endif
             srvDesc.Texture2D.MipLevels = 1;
 
-            D3D12_SHADER_RESOURCE_VIEW_DESC cubemapSrvDesc = {};
-            cubemapSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            cubemapSrvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-            cubemapSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
-            cubemapSrvDesc.TextureCube.MipLevels = 1;
-
-            auto loadFromStb = [&](const char* path) {
+            auto loadFromStb = [&](const char* path, size_t subresourceIndex) {
                 std::vector<uint8_t> textureData;
                 int textureWidth, textureHeight, textureChannels;
                 stbi_uc* pixels = stbi_load(path, &textureWidth, &textureHeight, &textureChannels, STBI_rgb_alpha);
                 CHECK(pixels != nullptr);
                 textureData.resize(textureWidth* textureHeight * 4);
                 memcpy(textureData.data(), pixels, textureData.size());
-                m_texture = CreateTexture(m_device.Get(), textureWidth, textureHeight, D3D12_HEAP_TYPE_DEFAULT);
+                if (m_texture.Get() == nullptr)
+                {
+                    m_texture = CreateTexture(m_device.Get(), textureWidth, textureHeight, D3D12_HEAP_TYPE_DEFAULT);
+                }
 
                 {
-                    textureUpload = CreateBuffer(m_device.Get(), textureData.size(), D3D12_HEAP_TYPE_UPLOAD);
+                    textureUpload[subresourceIndex] = CreateBuffer(m_device.Get(), textureData.size(), D3D12_HEAP_TYPE_UPLOAD);
 
                     void* data;
                     const D3D12_RANGE readRange{ 0, 0 };
-                    CHECK_HRCMD(textureUpload->Map(0, &readRange, &data));
+                    CHECK_HRCMD(textureUpload[subresourceIndex]->Map(0, &readRange, &data));
                     memcpy(data, textureData.data(), textureData.size());
-                    textureUpload->Unmap(0, nullptr);
+                    textureUpload[subresourceIndex]->Unmap(0, nullptr);
 
                     D3D12_TEXTURE_COPY_LOCATION dst = {};
                     dst.pResource = m_texture.Get();
                     dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-                    dst.SubresourceIndex = 0;
+                    dst.SubresourceIndex = subresourceIndex;
 
                     D3D12_TEXTURE_COPY_LOCATION src = {};
-                    src.pResource = textureUpload.Get();
+                    src.pResource = textureUpload[subresourceIndex].Get();
                     src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
                     src.PlacedFootprint.Offset = 0;
                     D3D12_RESOURCE_DESC textureDesc = m_texture->GetDesc();
@@ -484,32 +488,32 @@ namespace {
                 UINT subresourceCount = subresources.size();
 
                 {
-                    textureUpload = CreateBuffer(m_device.Get(), GetRequiredIntermediateSize(m_texture.Get(), 0, subresourceCount), D3D12_HEAP_TYPE_UPLOAD);
+                    textureUpload[0] = CreateBuffer(m_device.Get(), GetRequiredIntermediateSize(m_texture.Get(), 0, subresourceCount), D3D12_HEAP_TYPE_UPLOAD);
 
-                    UpdateSubresources(cmdList.Get(), m_texture.Get(), textureUpload.Get(), 0, 0, subresourceCount, subresources.data());
+                    UpdateSubresources(cmdList.Get(), m_texture.Get(), textureUpload[0].Get(), 0, 0, subresourceCount, subresources.data());
 
                     CD3DX12_RESOURCE_BARRIER transition = CD3DX12_RESOURCE_BARRIER::Transition(m_texture.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                     cmdList->ResourceBarrier(1, &transition);
                 }
 
                 srvDesc.Texture2D.MipLevels = subresourceCount;
-                cubemapSrvDesc.TextureCube.MipLevels = subresourceCount;
             };
 
 			{
 #ifdef CUBE_TEST
-                loadFromStb("textures/Wolfstein-cube.png");
-#endif
-#ifdef SPHERE_TEST
-                loadFromStb("textures/Wolfstein.jpg");
+                loadFromStb("textures/wolfstein-r.png", 0);
+                loadFromStb("textures/wolfstein-l.png", 1);
+                loadFromStb("textures/wolfstein-u.png", 2);
+                loadFromStb("textures/wolfstein-d.png", 3);
+                loadFromStb("textures/wolfstein-f.png", 4);
+                loadFromStb("textures/wolfstein-b.png", 5);
+#else
+                loadFromStb("textures/Wolfstein.jpg", 0);
                 //loadFromDds(L"textures/Wolfstein-test-1.dds");
 #endif
                 auto descriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
                 CD3DX12_CPU_DESCRIPTOR_HANDLE textureSrvHandle(m_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart(), 0, descriptorSize);
-                CD3DX12_CPU_DESCRIPTOR_HANDLE cubemapSrvHandle(m_cbvSrvHeap->GetCPUDescriptorHandleForHeapStart(), 1, descriptorSize);
-
                 m_device->CreateShaderResourceView(m_texture.Get(), &srvDesc, textureSrvHandle);
-                m_device->CreateShaderResourceView(m_texture.Get(), &cubemapSrvDesc, cubemapSrvHandle);
 			}
 
             CHECK_HRCMD(cmdList->Close());
@@ -868,7 +872,7 @@ namespace {
             if (m_desktopView.wantWriteImage)
             {
                 m_desktopView.CopyRenderResultToPreview(cmdList.Get(), colorTexture, 0);
-#if RENDER_PERFECT
+#ifdef RENDER_PERFECT
                 m_desktopView.CreatePerfectFilteredImage(spaceToView, *reinterpret_cast<XMMATRIX*>(&projectionMatrix), colorTextureDesc.Width, colorTextureDesc.Height);
                 m_desktopView.wantWriteImage = false;
 #endif

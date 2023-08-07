@@ -119,25 +119,35 @@ XMVECTOR WorldPosToEquirectangularTexturePos(XMVECTOR worldPos, size_t textureWi
     return XMVectorSet(u * static_cast<float>(textureWidth), v * static_cast<float>(textureHeight), 0.f, 0.f);
 }
 
+// Check if a point p is on the "positive" side of the edge e1->e2
+// result > 0 means p is on the positive side
+// result < 0 means p is on the negative side
+// result == 0 means p is on the edge
+float EdgeFunction(const XMVECTOR& e1, const XMVECTOR& e2, const XMVECTOR& p)
+{
+    return (XMVectorGetX(p) - XMVectorGetX(e1)) * (XMVectorGetY(e2) - XMVectorGetY(e1)) - (XMVectorGetY(p) - XMVectorGetY(e1)) * (XMVectorGetX(e2) - XMVectorGetX(e1));
+}
+
 void DesktopView::CreatePerfectFilteredImage(XMMATRIX spaceToView, XMMATRIX projection, size_t screenWidth, size_t screenHeight)
 {
     MemoryArena arena{};
-    uint8_t* imageData = NewArray(arena, uint8_t, screenWidth * screenHeight * 3);
+    uint8_t* outputData = NewArray(arena, uint8_t, screenWidth * screenHeight * 3);
     
     // load sphere texture with stb_image
-    int sphereTextureWidth, sphereTextureHeight, sphereTextureChannelCount;
-    uint8_t* sphereData = stbi_load("textures/Wolfstein.jpg", &sphereTextureWidth, &sphereTextureHeight, &sphereTextureChannelCount, 3);
-    assert(sphereData != nullptr);
-    if (sphereData == nullptr) return;
-
-    std::vector<XMVECTOR> intersectionsTopLeft{};
-    std::vector<XMVECTOR> intersectionsTopRight{};
-    std::vector<XMVECTOR> intersectionsBotLeft{};
-    std::vector<XMVECTOR> intersectionsBotRight{};
+    int sampleTextureWidth, sampleTextureHeight, sampleTextureChannelCount;
+    uint8_t* sampleData = stbi_load("textures/Wolfstein.jpg", &sampleTextureWidth, &sampleTextureHeight, &sampleTextureChannelCount, 3);
+    assert(sampleData != nullptr);
+    if (sampleData == nullptr) return;
 
     // Iterate output pixels
+    #pragma omp parallel for
     for (int y = 0; y < screenHeight; y++)
     {
+        std::vector<XMVECTOR> intersectionsTopLeft{};
+        std::vector<XMVECTOR> intersectionsTopRight{};
+        std::vector<XMVECTOR> intersectionsBotLeft{};
+        std::vector<XMVECTOR> intersectionsBotRight{};
+
         for (int x = 0; x < screenWidth; x++)
         {
             size_t outputIndex = (y * screenWidth + x) * 3;
@@ -151,82 +161,112 @@ void DesktopView::CreatePerfectFilteredImage(XMMATRIX spaceToView, XMMATRIX proj
             assert(intersectionsTopLeft.size() > 0 && intersectionsTopRight.size() > 0 && intersectionsBotLeft.size() > 0 && intersectionsBotRight.size() > 0);
             if (intersectionsTopLeft.size() == 0 || intersectionsTopRight.size() == 0 || intersectionsBotLeft.size() == 0 || intersectionsBotRight.size() == 0)
             {
-                imageData[outputIndex] = 0;
-                imageData[outputIndex + 1] = 0;
-                imageData[outputIndex + 2] = 0;
+                outputData[outputIndex] = 0;
+                outputData[outputIndex + 1] = 0;
+                outputData[outputIndex + 2] = 255;
                 continue;
             }
 
             // Project intersections to sphere texture
-            // TODO: deal with wrap around
-            XMVECTOR sphereTexturePositions[4] = {
-                WorldPosToEquirectangularTexturePos(intersectionsTopLeft[0],  sphereTextureWidth, sphereTextureHeight),
-				WorldPosToEquirectangularTexturePos(intersectionsTopRight[0], sphereTextureWidth, sphereTextureHeight),
-				WorldPosToEquirectangularTexturePos(intersectionsBotLeft[0],  sphereTextureWidth, sphereTextureHeight),
-				WorldPosToEquirectangularTexturePos(intersectionsBotRight[0], sphereTextureWidth, sphereTextureHeight)
+            XMVECTOR sampleQuadVertices[4] = {
+                WorldPosToEquirectangularTexturePos(intersectionsTopLeft[0],  sampleTextureWidth, sampleTextureHeight),
+				WorldPosToEquirectangularTexturePos(intersectionsTopRight[0], sampleTextureWidth, sampleTextureHeight),
+				WorldPosToEquirectangularTexturePos(intersectionsBotLeft[0],  sampleTextureWidth, sampleTextureHeight),
+				WorldPosToEquirectangularTexturePos(intersectionsBotRight[0], sampleTextureWidth, sampleTextureHeight)
             };
 
-            // Find bounding box on sphere texture
-            size_t minX = 0, minY = 0, maxX = 0, maxY = 0;
-            for (int i = 0; i < _countof(sphereTexturePositions); i++)
+            // Sort points on y axis
+            std::qsort(sampleQuadVertices, _countof(sampleQuadVertices), sizeof(XMVECTOR), [](const void* a, const void* b) -> int {
+                XMVECTOR aVec = *reinterpret_cast<const XMVECTOR*>(a);
+				XMVECTOR bVec = *reinterpret_cast<const XMVECTOR*>(b);
+                float ay = XMVectorGetY(aVec);
+                float by = XMVectorGetY(bVec);
+				if (ay < by) return -1;
+                if (ay > by) return 1;
+				return 0;
+			});
+
+            // Get bounds
+            float minX = XMVectorGetX(sampleQuadVertices[0]);
+            float minY = XMVectorGetY(sampleQuadVertices[0]);
+            float maxX = minX;
+            float maxY = minY;
+
+            for (int i = 0; i < _countof(sampleQuadVertices); i++)
             {
-                XMVECTOR sphereTexturePos = sphereTexturePositions[i];
-				size_t sphereTextureX = static_cast<size_t>(XMVectorGetX(sphereTexturePos));
-				size_t sphereTextureY = static_cast<size_t>(XMVectorGetY(sphereTexturePos));
-                if (i == 0)
-                {
-					minX = sphereTextureX;
-					minY = sphereTextureY;
-					maxX = sphereTextureX;
-					maxY = sphereTextureY;
-				}
-                else
-                {
-					minX = std::min(minX, sphereTextureX);
-					minY = std::min(minY, sphereTextureY);
-					maxX = std::max(maxX, sphereTextureX);
-					maxY = std::max(maxY, sphereTextureY);
-				}
+                float x = XMVectorGetX(sampleQuadVertices[i]);
+				float y = XMVectorGetY(sampleQuadVertices[i]);
+                
+                minX = std::min(minX, x);
+                minY = std::min(minY, y);
+                maxX = std::max(maxX, x);
+                maxY = std::max(maxY, y);
             }
 
-            // Average pixels inside quad defined by intersections
+            maxX = std::min(maxX, static_cast<float>(sampleTextureWidth - 1));
+            maxY = std::min(maxY, static_cast<float>(sampleTextureHeight - 1));
+
+            // Declare both triangles of the quad in clockwise order
+            if (XMVectorGetX(sampleQuadVertices[1]) > XMVectorGetX(sampleQuadVertices[2]))
+            {
+                std::swap(sampleQuadVertices[1], sampleQuadVertices[2]);
+            }
+            const XMVECTOR t1a = sampleQuadVertices[0];
+            const XMVECTOR t1b = sampleQuadVertices[2];
+            const XMVECTOR t1c = sampleQuadVertices[1];
+
+            const XMVECTOR t2a = sampleQuadVertices[1];
+            const XMVECTOR t2b = sampleQuadVertices[2];
+            const XMVECTOR t2c = sampleQuadVertices[3];
+
+            // Sum up all samples inside the two triangles
             size_t outR = 0;
             size_t outG = 0;
             size_t outB = 0;
             size_t sumCount = 0;
-            for (int sphereTexY = minY; sphereTexY <= maxY; sphereTexY++)
+
+            const size_t subSampleCount = 8;
+            for (size_t subSampleY = minY * subSampleCount; subSampleY <= maxY * subSampleCount; subSampleY++)
             {
-                // Calc intersection points between quad and horizontal line
-                size_t insideMinX = minX;
-                size_t insideMaxX = maxX;
-                
-                for (int sphereTexX = insideMinX; sphereTexX <= insideMaxX; sphereTexX++)
+                for (size_t subSampleX = minX * subSampleCount; subSampleX <= maxX * subSampleCount; subSampleX++)
                 {
-                    size_t sphereTexIndex = (sphereTexY * sphereTextureWidth + sphereTexX) * 3;
-					outR += sphereData[sphereTexIndex];
-					outG += sphereData[sphereTexIndex + 1];
-					outB += sphereData[sphereTexIndex + 2];
-                    sumCount += 1;
+                    const XMVECTOR pixel = XMVectorSet(static_cast<float>(subSampleX) / subSampleCount + .5f, static_cast<float>(subSampleY) / subSampleCount + .5f, 0.f, 0.f);
+                    if (   (EdgeFunction(t1a, t1b, pixel) >= 0.f && EdgeFunction(t1b, t1c, pixel) >= 0.f && EdgeFunction(t1c, t1a, pixel) >= 0.f)
+                        || (EdgeFunction(t2a, t2b, pixel) >= 0.f && EdgeFunction(t2b, t2c, pixel) >= 0.f && EdgeFunction(t2c, t2a, pixel) >= 0.f))
+                    {
+                        size_t sampleTexIndex = ((subSampleY / subSampleCount) * sampleTextureWidth + (subSampleX / subSampleCount)) * 3;
+                        outR += static_cast<uint8_t>(pow(static_cast<double>(sampleData[sampleTexIndex]) / 255., 1. / 2.2) * 255.);
+                        outG += static_cast<uint8_t>(pow(static_cast<double>(sampleData[sampleTexIndex + 1]) / 255., 1. / 2.2) * 255.);
+                        outB += static_cast<uint8_t>(pow(static_cast<double>(sampleData[sampleTexIndex + 2]) / 255., 1. / 2.2) * 255.);
+                        sumCount += 1;
+                    }
                 }
             }
             
-            assert(sumCount > 0);
+            // Average sample results
+            //assert(sumCount > 0);
             if (sumCount == 0)
             {
-                imageData[outputIndex] = 0;
-                imageData[outputIndex + 1] = 0;
-                imageData[outputIndex + 2] = 0;
+                size_t centerX = (minX + maxX) / 2.f;
+                size_t centerY = (minY + maxY) / 2.f;
+                size_t sampleTexIndex = (centerY * sampleTextureWidth + centerX) * 3;
+                outputData[outputIndex]     = pow(sampleData[sampleTexIndex]     / 255., 1. / 2.2) * 255.;
+                outputData[outputIndex + 1] = pow(sampleData[sampleTexIndex + 1] / 255., 1. / 2.2) * 255.;
+                outputData[outputIndex + 2] = pow(sampleData[sampleTexIndex + 2] / 255., 1. / 2.2) * 255.;
             }
             else
             {
-                imageData[outputIndex] = static_cast<uint8_t>(outR / sumCount);
-                imageData[outputIndex + 1] = static_cast<uint8_t>(outG / sumCount);
-                imageData[outputIndex + 2] = static_cast<uint8_t>(outB / sumCount);
+                outputData[outputIndex] = static_cast<uint8_t>(outR / sumCount);
+                outputData[outputIndex + 1] = static_cast<uint8_t>(outG / sumCount);
+                outputData[outputIndex + 2] = static_cast<uint8_t>(outB / sumCount);
             }
         }
     }
 
-    stbi_write_png("perfect.png", screenWidth, screenHeight, 3, imageData, screenWidth * 3);
+    stbi_write_png("comparison_perfect_raytraced.png", screenWidth, screenHeight, 3, outputData, screenWidth * 3);
+    //stbi_write_png("sampled-texture.png", sampleTextureWidth, sampleTextureHeight, 3, sampleData, sampleTextureWidth * 3);
+    OutputDebugStringA("Done!\n");
+    exit(0);
 }
 
 bool DesktopView::WriteFile(const char* name)
